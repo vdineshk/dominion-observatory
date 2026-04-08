@@ -597,8 +597,12 @@ async function handleMCPRequest(request, db) {
     switch (method) {
       case "initialize":
         return respond({
-          protocolVersion: "2024-11-05",
-          capabilities: { tools: { listChanged: false } },
+          protocolVersion: "2025-11-05",
+          capabilities: {
+            tools: { listChanged: false },
+            prompts: { listChanged: false },
+            resources: { listChanged: false }
+          },
           serverInfo: {
             name: "Dominion Observatory",
             version: "1.0.0"
@@ -607,6 +611,105 @@ async function handleMCPRequest(request, db) {
 
       case "notifications/initialized":
         return respond({});
+
+      case "prompts/list":
+        return respond({
+          prompts: [
+            {
+              name: "assess_server_trust",
+              description: "Check trust score and reliability of an MCP server before using it. Provide the server URL and get a full trust assessment including score, latency, success rate, and recommendation.",
+              arguments: [
+                {
+                  name: "server_url",
+                  description: "The URL of the MCP server to assess",
+                  required: true
+                }
+              ]
+            },
+            {
+              name: "ecosystem_overview",
+              description: "Get a high-level overview of the MCP server ecosystem — how many servers are tracked, top categories, and the current state of behavioral baselines.",
+              arguments: []
+            }
+          ]
+        });
+
+      case "prompts/get": {
+        const promptName = params?.name;
+        if (promptName === "assess_server_trust") {
+          const serverUrl = params?.arguments?.server_url || "https://example.com/mcp";
+          return respond({
+            messages: [
+              {
+                role: "user",
+                content: {
+                  type: "text",
+                  text: `Check the trust score for the MCP server at ${serverUrl}. Use the check_trust tool with this URL, then summarize whether it's safe to use — include the trust score, success rate, average latency, and your recommendation.`
+                }
+              }
+            ]
+          });
+        } else if (promptName === "ecosystem_overview") {
+          return respond({
+            messages: [
+              {
+                role: "user",
+                content: {
+                  type: "text",
+                  text: "Get the current Observatory stats using the observatory_stats tool, then get the leaderboard of top servers. Summarize the ecosystem health: how many servers are tracked, how many interactions have been recorded, and which categories have the most reliable servers."
+                }
+              }
+            ]
+          });
+        }
+        return respondError(-32601, `Unknown prompt: ${promptName}`);
+      }
+
+      case "resources/list":
+        return respond({
+          resources: [
+            {
+              uri: "observatory://stats",
+              name: "Observatory Statistics",
+              description: "Current network-wide statistics including total servers tracked, interactions recorded, and category breakdown.",
+              mimeType: "application/json"
+            },
+            {
+              uri: "observatory://leaderboard",
+              name: "Server Leaderboard",
+              description: "Top-rated MCP servers across all categories, ranked by trust score.",
+              mimeType: "application/json"
+            }
+          ]
+        });
+
+      case "resources/read": {
+        const resourceUri = params?.uri;
+        if (resourceUri === "observatory://stats") {
+          const stats = await handleObservatoryStats(db);
+          return respond({
+            contents: [
+              {
+                uri: "observatory://stats",
+                mimeType: "application/json",
+                text: JSON.stringify(stats, null, 2)
+              }
+            ]
+          });
+        } else if (resourceUri === "observatory://leaderboard") {
+          const leaderboard = await handleGetLeaderboard(db, { limit: 20 });
+          return respond({
+            contents: [
+              {
+                uri: "observatory://leaderboard",
+                mimeType: "application/json",
+                text: JSON.stringify(leaderboard, null, 2)
+              }
+            ]
+          });
+        }
+        return respondError(-32002, `Unknown resource: ${resourceUri}`);
+      }
 
       case "tools/list":
         return respond({ tools: TOOLS });
