@@ -1,0 +1,1 @@
+{"name":"dominion-observatory","main":"src/index.js","compatibility_date":"2025-04-01","compatibility_flags":["nodejs_compat"],"d1_databases":[{"binding":"DB","database_name":"dominion-db","database_id":"2979515b-1cfc-42f2-9f40-be1b680a73aa"}]}
