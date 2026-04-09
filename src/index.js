@@ -1,4 +1,4 @@
-// DOMINION OBSERVATORY v1.0
+// DOMINION OBSERVATORY v1.1
 // The Behavioral Trust Layer for the Agent Economy
 // Deployed on Cloudflare Workers + D1
 // 
@@ -248,6 +248,39 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {}
+    }
+  },
+  {
+    name: "get_compliance_report",
+    description: "Export structured interaction audit trail for regulatory compliance (EU AI Act Article 12, Singapore IMDA Agentic AI Framework). Returns timestamped, attributable interaction logs with server identity, outcome, latency, and error details. Use this to generate evidence for AI governance audits. Supports filtering by server, agent, date range, and outcome.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_url: {
+          type: "string",
+          description: "Filter by MCP server URL (optional)"
+        },
+        agent_id: {
+          type: "string",
+          description: "Filter by agent identifier (optional)"
+        },
+        start_date: {
+          type: "string",
+          description: "Start date in ISO format YYYY-MM-DD (optional, defaults to 90 days ago)"
+        },
+        end_date: {
+          type: "string",
+          description: "End date in ISO format YYYY-MM-DD (optional, defaults to today)"
+        },
+        success_only: {
+          type: "boolean",
+          description: "If true, only return successful interactions; if false, only failures (optional, returns all by default)"
+        },
+        limit: {
+          type: "integer",
+          description: "Max records to return (default 100, max 1000)"
+        }
+      }
     }
   }
 ];
@@ -546,6 +579,111 @@ async function handleGetServerHistory(db, params) {
   };
 }
 
+async function handleGetComplianceReport(db, params) {
+  const limit = Math.min(params.limit || 100, 1000);
+  const endDate = params.end_date || new Date().toISOString().split('T')[0];
+  const startDate = params.start_date || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+  let conditions = ["i.timestamp >= ? AND i.timestamp < datetime(?, '+1 day')"];
+  let binds = [startDate, endDate];
+
+  if (params.server_url) {
+    conditions.push("s.url = ?");
+    binds.push(params.server_url);
+  }
+  if (params.agent_id) {
+    conditions.push("i.agent_id = ?");
+    binds.push(params.agent_id);
+  }
+  if (params.success_only === true) {
+    conditions.push("i.success = 1");
+  } else if (params.success_only === false) {
+    conditions.push("i.success = 0");
+  }
+
+  const query = `
+    SELECT
+      i.id as interaction_id,
+      i.timestamp,
+      s.url as server_url,
+      s.name as server_name,
+      s.category as server_category,
+      i.agent_id,
+      i.tool_name,
+      i.success,
+      i.latency_ms,
+      i.error_type,
+      i.error_message,
+      i.http_status
+    FROM interactions i
+    JOIN servers s ON i.server_id = s.id
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY i.timestamp DESC
+    LIMIT ?
+  `;
+  binds.push(limit);
+
+  const stmt = db.prepare(query);
+  const results = await stmt.bind(...binds).all();
+
+  const summaryBinds = binds.slice(0, -1); // exclude limit
+  const summary = await db.prepare(`
+    SELECT
+      COUNT(*) as total_interactions,
+      SUM(CASE WHEN i.success = 1 THEN 1 ELSE 0 END) as successful,
+      SUM(CASE WHEN i.success = 0 THEN 1 ELSE 0 END) as failed,
+      COUNT(DISTINCT s.url) as unique_servers,
+      COUNT(DISTINCT i.agent_id) as unique_agents,
+      AVG(i.latency_ms) as avg_latency_ms
+    FROM interactions i
+    JOIN servers s ON i.server_id = s.id
+    WHERE ${conditions.join(" AND ")}
+  `).bind(...summaryBinds).all();
+
+  const summaryRow = summary.results?.[0] || {};
+
+  return {
+    compliance_report: {
+      standard: "Dominion Observatory Interaction Audit Trail v1.0",
+      applicable_regulations: [
+        "EU AI Act 2024/1689 — Article 12 (Record-keeping)",
+        "EU AI Act 2024/1689 — Article 14 (Human oversight)",
+        "Singapore IMDA Model AI Governance Framework for Agentic AI (2026)"
+      ],
+      generated_at: new Date().toISOString(),
+      date_range: { start: startDate, end: endDate },
+      filters_applied: {
+        server_url: params.server_url || null,
+        agent_id: params.agent_id || null,
+        success_only: params.success_only ?? null
+      }
+    },
+    summary: {
+      total_interactions: summaryRow.total_interactions || 0,
+      successful: summaryRow.successful || 0,
+      failed: summaryRow.failed || 0,
+      success_rate: summaryRow.total_interactions > 0
+        ? Math.round((summaryRow.successful / summaryRow.total_interactions) * 1000) / 10
+        : null,
+      unique_servers: summaryRow.unique_servers || 0,
+      unique_agents: summaryRow.unique_agents || 0,
+      avg_latency_ms: summaryRow.avg_latency_ms ? Math.round(summaryRow.avg_latency_ms) : null
+    },
+    interactions: (results.results || []).map(r => ({
+      interaction_id: r.interaction_id,
+      timestamp: r.timestamp,
+      server: { url: r.server_url, name: r.server_name, category: r.server_category },
+      agent_id: r.agent_id,
+      tool_name: r.tool_name,
+      outcome: r.success ? "success" : "failure",
+      latency_ms: r.latency_ms,
+      error: r.success ? null : { type: r.error_type, message: r.error_message, http_status: r.http_status }
+    })),
+    record_count: (results.results || []).length,
+    data_integrity_note: "Records stored in Cloudflare D1 with automatic replication. Timestamps are UTC. Interaction IDs are sequential and immutable."
+  };
+}
+
 async function handleObservatoryStats(db) {
   const stats = await db.prepare(`
     SELECT 
@@ -744,6 +882,9 @@ async function handleMCPRequest(request, db) {
           case "observatory_stats":
             result = await handleObservatoryStats(db);
             break;
+          case "get_compliance_report":
+            result = await handleGetComplianceReport(db, toolArgs);
+            break;
           default:
             return respondError(-32601, `Unknown tool: ${toolName}`);
         }
@@ -820,6 +961,23 @@ export default {
       });
     }
 
+    // REST API for compliance export (EU AI Act / IMDA)
+    if (url.pathname === "/api/compliance" && request.method === "GET") {
+      const params = {
+        server_url: url.searchParams.get("server_url") || undefined,
+        agent_id: url.searchParams.get("agent_id") || undefined,
+        start_date: url.searchParams.get("start_date") || undefined,
+        end_date: url.searchParams.get("end_date") || undefined,
+        limit: parseInt(url.searchParams.get("limit") || "100")
+      };
+      const successParam = url.searchParams.get("success_only");
+      if (successParam !== null) params.success_only = successParam === "true";
+      const result = await handleGetComplianceReport(db, params);
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
     // REST API for stats
     if (url.pathname === "/api/stats" && request.method === "GET") {
       const result = await handleObservatoryStats(db);
@@ -837,7 +995,8 @@ export default {
         mcp: "/mcp",
         trust_check: "/api/trust?url=<server_url>",
         leaderboard: "/api/leaderboard?category=<category>&limit=<n>",
-        stats: "/api/stats"
+        stats: "/api/stats",
+        compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>"
       },
       tools: TOOLS.map(t => ({ name: t.name, description: t.description })),
       data_since: "2026-04-08",
