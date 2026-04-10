@@ -249,6 +249,35 @@ const TOOLS = [
       type: "object",
       properties: {}
     }
+  },
+  {
+    name: "get_compliance_report",
+    description: "Export structured interaction audit trail for regulatory compliance (EU AI Act Article 12, Singapore IMDA Agentic AI Framework). Returns timestamped, attributable interaction logs with server identity, outcome, latency, and error details. Use this to generate evidence for AI governance audits. Supports filtering by server, agent, date range, and outcome.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_url: {
+          type: "string",
+          description: "Filter by MCP server URL (optional)"
+        },
+        agent_id: {
+          type: "string",
+          description: "Filter by agent ID (optional)"
+        },
+        start_date: {
+          type: "string",
+          description: "Start date filter in YYYY-MM-DD format (optional)"
+        },
+        end_date: {
+          type: "string",
+          description: "End date filter in YYYY-MM-DD format (optional)"
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum records to return (default 100, max 1000)"
+        }
+      }
+    }
   }
 ];
 
@@ -376,11 +405,11 @@ async function handleGetLeaderboard(db, params) {
   let query, results;
   if (category) {
     results = await db.prepare(
-      "SELECT url, name, category, trust_score, total_calls, successful_calls, avg_latency_ms, first_seen FROM servers WHERE category = ? AND total_calls >= 5 ORDER BY trust_score DESC LIMIT ?"
+      "SELECT url, name, category, trust_score, total_calls, successful_calls, avg_latency_ms, first_seen FROM servers WHERE category = ? ORDER BY trust_score DESC LIMIT ?"
     ).bind(category, limit).all();
   } else {
     results = await db.prepare(
-      "SELECT url, name, category, trust_score, total_calls, successful_calls, avg_latency_ms, first_seen FROM servers WHERE total_calls >= 5 ORDER BY trust_score DESC LIMIT ?"
+      "SELECT url, name, category, trust_score, total_calls, successful_calls, avg_latency_ms, first_seen FROM servers ORDER BY trust_score DESC LIMIT ?"
     ).bind(limit).all();
   }
 
@@ -397,7 +426,6 @@ async function handleGetLeaderboard(db, params) {
       tracked_since: s.first_seen
     })),
     total_results: (results.results || []).length,
-    min_interactions: 5,
     generated_at: new Date().toISOString()
   };
 }
@@ -543,6 +571,51 @@ async function handleGetServerHistory(db, params) {
     trend: (history.results || []).length >= 2 
       ? (history.results[0].trust_score > history.results[history.results.length - 1].trust_score ? "improving" : "declining")
       : "insufficient_data"
+  };
+}
+
+async function handleGetComplianceReport(db, params) {
+  const limit = Math.min(params.limit || 100, 1000);
+  let query = `
+    SELECT i.id, i.timestamp, i.agent_id, i.tool_name, i.success, i.latency_ms,
+           i.error_type, i.error_message, i.http_status,
+           s.url as server_url, s.name as server_name, s.category
+    FROM interactions i
+    JOIN servers s ON i.server_id = s.id
+    WHERE 1=1
+  `;
+  const bindings = [];
+
+  if (params.server_url) { query += " AND s.url = ?"; bindings.push(params.server_url); }
+  if (params.agent_id) { query += " AND i.agent_id = ?"; bindings.push(params.agent_id); }
+  if (params.start_date) { query += " AND i.timestamp >= ?"; bindings.push(params.start_date + " 00:00:00"); }
+  if (params.end_date) { query += " AND i.timestamp <= ?"; bindings.push(params.end_date + " 23:59:59"); }
+
+  query += " ORDER BY i.timestamp DESC LIMIT ?";
+  bindings.push(limit);
+
+  const results = await db.prepare(query).bind(...bindings).all();
+
+  return {
+    compliance_framework: ["EU AI Act Article 12", "Singapore IMDA Agentic AI Governance Framework"],
+    generated_at: new Date().toISOString(),
+    filters_applied: {
+      server_url: params.server_url || null,
+      agent_id: params.agent_id || null,
+      start_date: params.start_date || null,
+      end_date: params.end_date || null
+    },
+    total_records: (results.results || []).length,
+    interactions: (results.results || []).map(r => ({
+      interaction_id: r.id,
+      timestamp: r.timestamp,
+      server: { url: r.server_url, name: r.server_name, category: r.category },
+      agent_id: r.agent_id || "anonymous",
+      tool_called: r.tool_name || null,
+      outcome: { success: !!r.success, http_status: r.http_status || null, latency_ms: r.latency_ms || null },
+      error: r.error_type ? { type: r.error_type, message: r.error_message } : null
+    })),
+    attestation: "Dominion Observatory — behavioral audit trail. Data stored in Cloudflare D1, Singapore region."
   };
 }
 
@@ -744,6 +817,9 @@ async function handleMCPRequest(request, db) {
           case "observatory_stats":
             result = await handleObservatoryStats(db);
             break;
+          case "get_compliance_report":
+            result = await handleGetComplianceReport(db, toolArgs);
+            break;
           default:
             return respondError(-32601, `Unknown tool: ${toolName}`);
         }
@@ -828,6 +904,47 @@ export default {
       });
     }
 
+    // REST API for compliance export
+    if (url.pathname === "/api/compliance" && request.method === "GET") {
+      const p = {
+        server_url: url.searchParams.get("server_url") || undefined,
+        agent_id: url.searchParams.get("agent_id") || undefined,
+        start_date: url.searchParams.get("start_date") || undefined,
+        end_date: url.searchParams.get("end_date") || undefined,
+        limit: parseInt(url.searchParams.get("limit") || "100")
+      };
+      const result = await handleGetComplianceReport(db, p);
+      return new Response(JSON.stringify(result), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // REST API for reporting interactions (non-MCP agents can use this)
+    if (url.pathname === "/api/report" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); } catch { return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers: { "Content-Type": "application/json" } }); }
+      if (!body.server_url || body.success === undefined) {
+        return new Response(JSON.stringify({ error: "server_url and success are required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      const result = await handleReportInteraction(db, body);
+      return new Response(JSON.stringify(result), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // REST API for registering servers (non-MCP agents can use this)
+    if (url.pathname === "/api/register" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); } catch { return new Response(JSON.stringify({ error: "Invalid JSON body" }), { status: 400, headers: { "Content-Type": "application/json" } }); }
+      if (!body.server_url || !body.name) {
+        return new Response(JSON.stringify({ error: "server_url and name are required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      const result = await handleRegisterServer(db, body);
+      return new Response(JSON.stringify(result), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
     // Landing page
     return new Response(JSON.stringify({
       name: "Dominion Observatory",
@@ -837,7 +954,10 @@ export default {
         mcp: "/mcp",
         trust_check: "/api/trust?url=<server_url>",
         leaderboard: "/api/leaderboard?category=<category>&limit=<n>",
-        stats: "/api/stats"
+        stats: "/api/stats",
+        report_interaction: "POST /api/report {server_url, success, latency_ms?, tool_name?, error_type?, error_message?, http_status?}",
+        register_server: "POST /api/register {server_url, name, description?, category?, github_url?}",
+        compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>"
       },
       tools: TOOLS.map(t => ({ name: t.name, description: t.description })),
       data_since: "2026-04-08",
