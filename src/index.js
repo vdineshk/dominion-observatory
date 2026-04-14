@@ -515,6 +515,57 @@ async function handleCheckAnomaly(db, params) {
   };
 }
 
+// ============================================================
+// CATEGORY INFERENCE
+// Keyword-based classifier — promotes 'other'/'uncategorized' servers
+// into real categories so baselines actually mean something.
+// Order matters: more specific categories come first.
+// ============================================================
+const CATEGORY_PATTERNS = [
+  // Weather is a small but valuable category — match early.
+  ["weather", /\b(weather|forecast|meteo|climate|noaa|ipma|temperature|precipitation)\b/i],
+  // Finance / payments / commerce
+  ["finance", /\b(stripe|paypal|payment|payments|invoice|billing|stock|stocks|trading|crypto|bitcoin|ethereum|wallet|bank|banking|finance|financial|accounting|ledger|tax|escrow|gumroad|mercadolibre|shopify|woocommerce|polygon|coinbase|defi|nft|treasury|payroll)\b/i],
+  // Compliance / legal / governance / audit
+  ["compliance", /\b(compliance|gdpr|hipaa|sox|pci|audit|legal|law|regulation|regulatory|policy|attestation|governance|risk|imda|eu ai act|nist|iso 27001|soc 2)\b/i],
+  // Search / retrieval / scraping
+  ["search", /\b(search|tavily|brave search|exa|serper|firecrawl|crawl|scrap(er|ing)|jina|perplexity|kagi|duckduckgo|google search|bing|web search|retriev(al|er)|deepwiki|desearch)\b/i],
+  // Communication / messaging / email / chat
+  ["communication", /\b(gmail|email|mail|outlook|slack|discord|telegram|whatsapp|sms|twilio|sendgrid|messag(e|ing)|chat|inbox|notification|webhook|signal|teams|zoom|meet|smtp|imap|pubsub|agentmail)\b/i],
+  // Code / dev / git / CI / cloud infra
+  ["code", /\b(github|gitlab|bitbucket|git\b|repo|repository|code|codebase|ci\/cd|pipeline|deploy|deployment|devops|terraform|kubernetes|k8s|docker|aws|gcp|azure|cloudflare|vercel|netlify|railway|render|fly\.io|heroku|jenkins|circleci|sentry|datadog|grafana|prometheus|lint|test runner|debug|ide|jetbrains|vscode|cursor|playwright|puppeteer|selenium|zuplo)\b/i],
+  // Data / databases / analytics / warehouses
+  ["data", /\b(mysql|postgres|postgresql|sqlite|mongodb|mongo|redis|cassandra|elastic(search)?|clickhouse|duckdb|snowflake|bigquery|databricks|redshift|airtable|notion db|metabase|tableau|powerbi|analytics|data warehouse|etl|dbt|kafka|spark|hadoop|s3|bucket|storage|pocketbase|supabase|firebase|prisma|sql\b|nosql|cloudinary|sift)\b/i],
+  // Productivity / project mgmt / docs / notes / calendar
+  ["productivity", /\b(notion|trello|asana|jira|linear|monday|clickup|todoist|airtable|calendar|google calendar|outlook calendar|reminder|task|todo|note|notes|docs|google docs|confluence|obsidian|evernote|spreadsheet|excel|google sheets|hubspot|salesforce|crm|workflow|n8n|zapier|make|automat(e|ion))\b/i],
+  // Transport / travel / mobility
+  ["transport", /\b(flight|airline|airport|hotel|airbnb|booking|expedia|uber|lyft|grab|taxi|train|rail|transit|maps|directions|routing|navigation|gps|fleet|shipping|logistics|dhl|fedex|ups|tracking number)\b/i],
+  // Media / video / audio / image / streaming / social
+  ["media", /\b(youtube|tiktok|instagram|twitter|x\.com|facebook|reddit|linkedin|pinterest|video|audio|podcast|music|spotify|soundcloud|image|photo|tavus|stable diffusion|midjourney|dall.?e|tts|stt|whisper|elevenlabs|ffmpeg|streaming|transcript|caption|subtitle|cloudinary|freebeat)\b/i],
+  // Education / learning / reference
+  ["education", /\b(course|learn(ing)?|tutorial|education|school|university|wikipedia|wiki\b|knowledge base|encyclopedia|dictionary|translate|translation|language|duolingo|khan|coursera|udemy|pronunciation)\b/i],
+  // Security / scanning / auth / secrets
+  ["security", /\b(security|vulnerability|cve|sast|dast|pentest|penetration|firewall|waf|auth|authentication|oauth|saml|sso|2fa|mfa|secret|vault|kms|encryption|tls|certificate|password|owasp|exposure)\b/i],
+  // Health / fitness / wellness
+  ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i],
+];
+
+function inferCategory(name, description, url) {
+  const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
+  if (!haystack.trim()) return null;
+  // Reject pure test/demo entries — they should not pollute real categories.
+  if (/^(test|echo|demo|sample|hello world|mcp-test|example|placeholder)$/i.test((name || "").trim())) {
+    return "test";
+  }
+  for (const [category, pattern] of CATEGORY_PATTERNS) {
+    if (pattern.test(haystack)) return category;
+  }
+  return null;
+}
+
+// Categories the classifier should overwrite (anything generic counts as "needs work").
+const GENERIC_CATEGORIES = new Set(["other", "uncategorized", null, "", undefined]);
+
 async function handleRegisterServer(db, params) {
   const { server_url, name, description, category, github_url } = params;
 
@@ -523,25 +574,31 @@ async function handleRegisterServer(db, params) {
     return { registered: false, error: "Observatory cannot track itself. This creates circular data." };
   }
 
+  // Resolve final category: caller-supplied wins if specific, otherwise infer.
+  let finalCategory = category;
+  if (GENERIC_CATEGORIES.has(finalCategory)) {
+    finalCategory = inferCategory(name, description, server_url) || finalCategory || 'uncategorized';
+  }
+
   const existing = await db.prepare("SELECT id FROM servers WHERE url = ?").bind(server_url).first();
   if (existing) {
     // Update if exists
     await db.prepare(
       "UPDATE servers SET name = COALESCE(?, name), description = COALESCE(?, description), category = COALESCE(?, category), github_url = COALESCE(?, github_url) WHERE url = ?"
-    ).bind(name, description || null, category || null, github_url || null, server_url).run();
-    
-    return { registered: true, updated: true, server_url, message: "Server profile updated." };
+    ).bind(name, description || null, finalCategory || null, github_url || null, server_url).run();
+
+    return { registered: true, updated: true, server_url, category: finalCategory, message: "Server profile updated." };
   }
 
   // Calculate static score
   let staticScore = 50;
   if (github_url) staticScore += 10;
   if (description && description.length > 50) staticScore += 10;
-  if (category && category !== 'other') staticScore += 5;
+  if (finalCategory && finalCategory !== 'other' && finalCategory !== 'uncategorized') staticScore += 5;
 
   await db.prepare(
     "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).bind(server_url, name, description || null, category || 'uncategorized', github_url || null, staticScore, staticScore).run();
+  ).bind(server_url, name, description || null, finalCategory || 'uncategorized', github_url || null, staticScore, staticScore).run();
 
   return {
     registered: true,
@@ -891,6 +948,60 @@ export default {
     if (url.pathname === "/admin/cleanup-self" && request.method === "POST") {
       const deleted = await db.prepare("DELETE FROM servers WHERE url LIKE '%dominion-observatory%'").run();
       return new Response(JSON.stringify({ cleaned: true, changes: deleted.meta?.changes || 0 }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Admin: backfill categories for 'other'/'uncategorized' servers using inferCategory().
+    // Token-gated via env.ADMIN_TOKEN. Processes one batch per call so it stays under
+    // Worker CPU limits — caller paginates by passing offset.
+    if (url.pathname === "/admin/recategorize" && request.method === "POST") {
+      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401, headers: { "Content-Type": "application/json" }
+        });
+      }
+      const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1000);
+      const afterId = parseInt(url.searchParams.get("after_id") || "0");
+      const dryRun = url.searchParams.get("dry_run") === "1";
+      const rows = await db.prepare(
+        "SELECT id, name, description, url FROM servers WHERE category IN ('other', 'uncategorized') AND id > ? ORDER BY id LIMIT ?"
+      ).bind(afterId, batchSize).all();
+      const candidates = rows.results || [];
+      const updates = [];
+      const counts = {};
+      let lastId = afterId;
+      for (const row of candidates) {
+        if (row.id > lastId) lastId = row.id;
+        const newCat = inferCategory(row.name, row.description, row.url);
+        if (newCat) {
+          updates.push({ id: row.id, category: newCat });
+          counts[newCat] = (counts[newCat] || 0) + 1;
+        }
+      }
+      let updated = 0;
+      if (!dryRun && updates.length > 0) {
+        // Batch UPDATE via D1 transactional batch.
+        const stmts = updates.map(u =>
+          db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
+        );
+        const results = await db.batch(stmts);
+        updated = results.reduce((acc, r) => acc + (r.meta?.changes || 0), 0);
+      }
+      const remaining = await db.prepare(
+        "SELECT COUNT(*) as c FROM servers WHERE category IN ('other', 'uncategorized')"
+      ).first();
+      return new Response(JSON.stringify({
+        scanned: candidates.length,
+        matched: updates.length,
+        updated,
+        dry_run: dryRun,
+        next_after_id: lastId,
+        done: candidates.length < batchSize,
+        remaining_generic: remaining?.c || 0,
+        category_counts_this_batch: counts
+      }, null, 2), {
         headers: { "Content-Type": "application/json" }
       });
     }
