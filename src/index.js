@@ -515,6 +515,194 @@ async function handleCheckAnomaly(db, params) {
   };
 }
 
+// ============================================================
+// CATEGORY INFERENCE
+// Keyword-based classifier — promotes 'other'/'uncategorized' servers
+// into real categories so baselines actually mean something.
+// Order matters: more specific categories come first.
+// ============================================================
+const CATEGORY_PATTERNS = [
+  // Weather is a small but valuable category — match early.
+  ["weather", /\b(weather|forecast|meteo|climate|noaa|ipma|temperature|precipitation)\b/i],
+  // Finance / payments / commerce
+  ["finance", /\b(stripe|paypal|payment|payments|invoice|billing|stock|stocks|trading|crypto|bitcoin|ethereum|wallet|bank|banking|finance|financial|accounting|ledger|tax|escrow|gumroad|mercadolibre|shopify|woocommerce|polygon|coinbase|defi|nft|treasury|payroll)\b/i],
+  // Compliance / legal / governance / audit
+  ["compliance", /\b(compliance|gdpr|hipaa|sox|pci|audit|legal|law|regulation|regulatory|policy|attestation|governance|risk|imda|eu ai act|nist|iso 27001|soc 2)\b/i],
+  // Search / retrieval / scraping
+  ["search", /\b(search|tavily|brave search|exa|serper|firecrawl|crawl|scrap(er|ing)|jina|perplexity|kagi|duckduckgo|google search|bing|web search|retriev(al|er)|deepwiki|desearch)\b/i],
+  // Communication / messaging / email / chat
+  ["communication", /\b(gmail|email|mail|outlook|slack|discord|telegram|whatsapp|sms|twilio|sendgrid|messag(e|ing)|chat|inbox|notification|webhook|signal|teams|zoom|meet|smtp|imap|pubsub|agentmail)\b/i],
+  // Code / dev / git / CI / cloud infra
+  ["code", /\b(github|gitlab|bitbucket|git\b|repo|repository|code|codebase|ci\/cd|pipeline|deploy|deployment|devops|terraform|kubernetes|k8s|docker|aws|gcp|azure|cloudflare|vercel|netlify|railway|render|fly\.io|heroku|jenkins|circleci|sentry|datadog|grafana|prometheus|lint|test runner|debug|ide|jetbrains|vscode|cursor|playwright|puppeteer|selenium|zuplo)\b/i],
+  // Data / databases / analytics / warehouses
+  ["data", /\b(mysql|postgres|postgresql|sqlite|mongodb|mongo|redis|cassandra|elastic(search)?|clickhouse|duckdb|snowflake|bigquery|databricks|redshift|airtable|notion db|metabase|tableau|powerbi|analytics|data warehouse|etl|dbt|kafka|spark|hadoop|s3|bucket|storage|pocketbase|supabase|firebase|prisma|sql\b|nosql|cloudinary|sift)\b/i],
+  // Productivity / project mgmt / docs / notes / calendar
+  ["productivity", /\b(notion|trello|asana|jira|linear|monday|clickup|todoist|airtable|calendar|google calendar|outlook calendar|reminder|task|todo|note|notes|docs|google docs|confluence|obsidian|evernote|spreadsheet|excel|google sheets|hubspot|salesforce|crm|workflow|n8n|zapier|make|automat(e|ion))\b/i],
+  // Transport / travel / mobility
+  ["transport", /\b(flight|airline|airport|hotel|airbnb|booking|expedia|uber|lyft|grab|taxi|train|rail|transit|maps|directions|routing|navigation|gps|fleet|shipping|logistics|dhl|fedex|ups|tracking number)\b/i],
+  // Media / video / audio / image / streaming / social
+  ["media", /\b(youtube|tiktok|instagram|twitter|x\.com|facebook|reddit|linkedin|pinterest|video|audio|podcast|music|spotify|soundcloud|image|photo|tavus|stable diffusion|midjourney|dall.?e|tts|stt|whisper|elevenlabs|ffmpeg|streaming|transcript|caption|subtitle|cloudinary|freebeat)\b/i],
+  // Education / learning / reference
+  ["education", /\b(course|learn(ing)?|tutorial|education|school|university|wikipedia|wiki\b|knowledge base|encyclopedia|dictionary|translate|translation|language|duolingo|khan|coursera|udemy|pronunciation)\b/i],
+  // Security / scanning / auth / secrets
+  ["security", /\b(security|vulnerability|cve|sast|dast|pentest|penetration|firewall|waf|auth|authentication|oauth|saml|sso|2fa|mfa|secret|vault|kms|encryption|tls|certificate|password|owasp|exposure)\b/i],
+  // Health / fitness / wellness
+  ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i],
+];
+
+function inferCategory(name, description, url) {
+  const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
+  if (!haystack.trim()) return null;
+  // Reject pure test/demo entries — they should not pollute real categories.
+  if (/^(test|echo|demo|sample|hello world|mcp-test|example|placeholder)$/i.test((name || "").trim())) {
+    return "test";
+  }
+  for (const [category, pattern] of CATEGORY_PATTERNS) {
+    if (pattern.test(haystack)) return category;
+  }
+  return null;
+}
+
+// Categories the classifier should overwrite (anything generic counts as "needs work").
+const GENERIC_CATEGORIES = new Set(["other", "uncategorized", null, "", undefined]);
+
+// ============================================================
+// ACTIVE PROBE
+// The Observatory observes. Without active probing, interaction count
+// depends entirely on external agents finding us — single point of failure.
+// Cron triggers this periodically to probe registered MCP endpoints,
+// recording real latency/success as interactions tagged agent_id='observatory_probe'.
+// ============================================================
+
+// Only probe URLs that look like real callable endpoints, not directory listing pages.
+function isProbableEndpoint(url) {
+  if (!url) return false;
+  if (url.includes("dominion-observatory")) return false; // never probe self
+  // Same-account Cloudflare Workers can't be reliably probed via public URL —
+  // Cloudflare routes the request back to the calling Worker's edge node and
+  // hits our own catch-all 404 (confirmed via /admin/probe-one diagnostic).
+  // These need to be probed externally or via service bindings, not here.
+  if (url.includes("sgdata.workers.dev")) return false;
+  if (url.startsWith("|")) return false; // malformed URL from bad bulk import (description leaked into url field)
+  if (url.includes("github.com/")) return false; // repo link, not an endpoint
+  if (url.includes("example.com")) return false; // placeholder
+  if (url.includes("smithery.ai/server/")) return false;  // smithery listing page, not endpoint
+  if (url.includes("apitracker.io/mcp-server/")) return false; // apitracker listing
+  if (url.includes("glama.ai/mcp/servers/")) return false; // glama listing
+  if (url.includes("mcp.so/server/")) return false; // mcp.so listing
+  // Must parse as a real URL with http(s) scheme.
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  } catch {
+    return false;
+  }
+  return /workers\.dev|vercel\.app|fly\.io|run\.app|herokuapp\.com|onrender\.com|railway\.app|deno\.dev|\/mcp(\?|$|\/)/i.test(url);
+}
+
+async function probeOneServer(server) {
+  const start = Date.now();
+  try {
+    // Prefer POST tools/list to /mcp (real MCP probe). Fall back to HEAD if not /mcp.
+    const isMcp = server.url.includes("/mcp");
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    let res;
+    if (isMcp) {
+      res = await fetch(server.url, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "DominionObservatory-Probe/1.0 (+https://dominion-observatory.sgdata.workers.dev)"
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
+      });
+    } else {
+      res = await fetch(server.url, {
+        method: "HEAD",
+        signal: ctrl.signal,
+        headers: {
+          "User-Agent": "DominionObservatory-Probe/1.0 (+https://dominion-observatory.sgdata.workers.dev)"
+        }
+      });
+    }
+    clearTimeout(timeout);
+    const latency = Date.now() - start;
+    const ok = res.status >= 200 && res.status < 500; // 4xx still means server is alive
+    const success = res.status >= 200 && res.status < 400;
+    return {
+      success,
+      latency_ms: latency,
+      http_status: res.status,
+      error_type: success ? null : (res.status >= 500 ? "server_error" : "client_error"),
+      error_message: success ? null : `HTTP ${res.status}`
+    };
+  } catch (e) {
+    const latency = Date.now() - start;
+    const isTimeout = e.name === "AbortError" || /timeout/i.test(e.message || "");
+    return {
+      success: false,
+      latency_ms: latency,
+      http_status: null,
+      error_type: isTimeout ? "timeout" : "network_error",
+      error_message: (e.message || String(e)).slice(0, 200)
+    };
+  }
+}
+
+// Probe up to `max` due servers. Records each as an interaction via the existing
+// handleReportInteraction path so trust scores update consistently.
+async function runProbeBatch(db, max = 25) {
+  // Pick servers that look probable, oldest-checked first (round-robin).
+  // Pull more than `max` so JS-side isProbableEndpoint() filtering still leaves
+  // a full batch even when many SQL hits get rejected by the stricter JS filter.
+  const rows = await db.prepare(
+    `SELECT id, url, name FROM servers
+     WHERE (url LIKE '%workers.dev%'
+        OR url LIKE '%vercel.app%'
+        OR url LIKE '%fly.io%'
+        OR url LIKE '%run.app%'
+        OR url LIKE '%onrender.com%'
+        OR url LIKE '%railway.app%'
+        OR url LIKE '%deno.dev%'
+        OR url LIKE '%/mcp%')
+       AND url NOT LIKE '%dominion-observatory%'
+       AND url NOT LIKE '%smithery.ai%'
+       AND url NOT LIKE '%apitracker.io%'
+       AND url NOT LIKE '%glama.ai%'
+       AND url NOT LIKE '%mcp.so%'
+       AND url NOT LIKE '|%'
+       AND url NOT LIKE '%github.com%'
+       AND url NOT LIKE '%example.com%'
+       AND url NOT LIKE '%sgdata.workers.dev%'
+     ORDER BY COALESCE(last_checked, '1970-01-01') ASC
+     LIMIT ?`
+  ).bind(max * 8).all();
+  const candidates = (rows.results || []).filter(s => isProbableEndpoint(s.url)).slice(0, max);
+  if (candidates.length === 0) return { probed: 0, ok: 0, fail: 0 };
+
+  const results = await Promise.all(candidates.map(s => probeOneServer(s)));
+  let ok = 0;
+  for (let i = 0; i < candidates.length; i++) {
+    const s = candidates[i];
+    const r = results[i];
+    if (r.success) ok++;
+    // Use the existing report path so trust score / runtime score / last_checked update consistently.
+    await handleReportInteraction(db, {
+      server_url: s.url,
+      success: r.success,
+      latency_ms: r.latency_ms,
+      tool_name: "observatory_probe",
+      error_type: r.error_type,
+      error_message: r.error_message,
+      http_status: r.http_status,
+      agent_id: "observatory_probe"
+    }).catch(() => { /* never let one failure poison the batch */ });
+  }
+  return { probed: candidates.length, ok, fail: candidates.length - ok };
+}
+
 async function handleRegisterServer(db, params) {
   const { server_url, name, description, category, github_url } = params;
 
@@ -523,25 +711,31 @@ async function handleRegisterServer(db, params) {
     return { registered: false, error: "Observatory cannot track itself. This creates circular data." };
   }
 
+  // Resolve final category: caller-supplied wins if specific, otherwise infer.
+  let finalCategory = category;
+  if (GENERIC_CATEGORIES.has(finalCategory)) {
+    finalCategory = inferCategory(name, description, server_url) || finalCategory || 'uncategorized';
+  }
+
   const existing = await db.prepare("SELECT id FROM servers WHERE url = ?").bind(server_url).first();
   if (existing) {
     // Update if exists
     await db.prepare(
       "UPDATE servers SET name = COALESCE(?, name), description = COALESCE(?, description), category = COALESCE(?, category), github_url = COALESCE(?, github_url) WHERE url = ?"
-    ).bind(name, description || null, category || null, github_url || null, server_url).run();
-    
-    return { registered: true, updated: true, server_url, message: "Server profile updated." };
+    ).bind(name, description || null, finalCategory || null, github_url || null, server_url).run();
+
+    return { registered: true, updated: true, server_url, category: finalCategory, message: "Server profile updated." };
   }
 
   // Calculate static score
   let staticScore = 50;
   if (github_url) staticScore += 10;
   if (description && description.length > 50) staticScore += 10;
-  if (category && category !== 'other') staticScore += 5;
+  if (finalCategory && finalCategory !== 'other' && finalCategory !== 'uncategorized') staticScore += 5;
 
   await db.prepare(
     "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).bind(server_url, name, description || null, category || 'uncategorized', github_url || null, staticScore, staticScore).run();
+  ).bind(server_url, name, description || null, finalCategory || 'uncategorized', github_url || null, staticScore, staticScore).run();
 
   return {
     registered: true,
@@ -593,16 +787,37 @@ async function handleObservatoryStats(db) {
     "SELECT COUNT(*) as count FROM interactions WHERE timestamp > datetime('now', '-24 hours')"
   ).first();
 
+  // Honest split: probe-generated data vs. agent-reported data.
+  const sourceSplit = await db.prepare(
+    `SELECT
+       SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes,
+       SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported
+     FROM interactions`
+  ).first();
+
+  const recentSplit = await db.prepare(
+    `SELECT
+       SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes_24h,
+       SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported_24h
+     FROM interactions WHERE timestamp > datetime('now', '-24 hours')`
+  ).first();
+
   return {
     observatory: "Dominion Observatory",
-    version: "1.0.0",
+    version: "1.1.0",
     total_servers_tracked: stats?.total_servers || 0,
     total_interactions_recorded: stats?.total_interactions || 0,
     average_trust_score: stats?.avg_trust_score ? Math.round(stats.avg_trust_score * 10) / 10 : null,
     interactions_last_24h: recentActivity?.count || 0,
+    interaction_sources: {
+      observatory_probes_total: sourceSplit?.probes || 0,
+      agent_reported_total: sourceSplit?.agent_reported || 0,
+      observatory_probes_24h: recentSplit?.probes_24h || 0,
+      agent_reported_24h: recentSplit?.agent_reported_24h || 0
+    },
     categories: (categories.results || []).map(c => ({ name: c.category, servers: c.count })),
     data_collection_started: "2026-04-08",
-    message: "Every interaction reported strengthens the trust network for all agents."
+    message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines."
   };
 }
 
@@ -861,6 +1076,21 @@ async function handleMCPRequest(request, db) {
 // ============================================================
 
 export default {
+  // Cloudflare cron entry point. Configured in wrangler.jsonc.
+  // Runs every 15 minutes; probes ~25 callable MCP endpoints per run.
+  // Result: ~2,400 real probes/day = enough data for category baselines
+  // independent of organic agent flywheel.
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil((async () => {
+      try {
+        const result = await runProbeBatch(env.DB, 25);
+        console.log("scheduled probe", JSON.stringify(result));
+      } catch (e) {
+        console.log("scheduled probe error", e.message);
+      }
+    })());
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const db = env.DB;
@@ -891,6 +1121,171 @@ export default {
     if (url.pathname === "/admin/cleanup-self" && request.method === "POST") {
       const deleted = await db.prepare("DELETE FROM servers WHERE url LIKE '%dominion-observatory%'").run();
       return new Response(JSON.stringify({ cleaned: true, changes: deleted.meta?.changes || 0 }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Admin: clean up rows whose `url` field was polluted by a bad bulk import
+    // (e.g., `|description|||https://real.url/mcp`). Either repair them by
+    // extracting the real URL, or delete unrecoverable rows. Token-gated.
+    if (url.pathname === "/admin/clean-malformed-urls" && request.method === "POST") {
+      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401, headers: { "Content-Type": "application/json" }
+        });
+      }
+      try {
+      const dryRun = url.searchParams.get("dry_run") === "1";
+      const bad = await db.prepare("SELECT id, url FROM servers WHERE url LIKE '|%' LIMIT 200").all();
+      const rows = bad.results || [];
+      // Build the plan in JS first, then dispatch via a single db.batch().
+      const updates = [];
+      const deletes = [];
+      const seenUrls = new Set();
+      for (const row of rows) {
+        const m = row.url.match(/(https?:\/\/[^\s|]+)\s*$/);
+        if (m) {
+          const cleanUrl = m[1];
+          // If this clean URL collides within this batch, drop the duplicate.
+          if (seenUrls.has(cleanUrl)) {
+            deletes.push(row.id);
+          } else {
+            seenUrls.add(cleanUrl);
+            updates.push({ id: row.id, url: cleanUrl });
+          }
+        } else {
+          deletes.push(row.id);
+        }
+      }
+      let repaired = 0;
+      let deleted = 0;
+      let collisions = 0;
+      if (!dryRun) {
+        // Pre-check collisions with already-existing rows in one query.
+        if (updates.length > 0) {
+          const placeholders = updates.map(() => "?").join(",");
+          const existing = await db.prepare(
+            `SELECT url FROM servers WHERE url IN (${placeholders})`
+          ).bind(...updates.map(u => u.url)).all();
+          const existingSet = new Set((existing.results || []).map(r => r.url));
+          // Move colliders from updates -> deletes.
+          for (let i = updates.length - 1; i >= 0; i--) {
+            if (existingSet.has(updates[i].url)) {
+              deletes.push(updates[i].id);
+              updates.splice(i, 1);
+              collisions++;
+            }
+          }
+        }
+        const stmts = [];
+        for (const u of updates) {
+          stmts.push(db.prepare("UPDATE servers SET url = ? WHERE id = ?").bind(u.url, u.id));
+        }
+        for (const id of deletes) {
+          stmts.push(db.prepare("DELETE FROM servers WHERE id = ?").bind(id));
+        }
+        if (stmts.length > 0) {
+          const results = await db.batch(stmts);
+          repaired = results.slice(0, updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
+          deleted = results.slice(updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
+        }
+      } else {
+        repaired = updates.length;
+        deleted = deletes.length;
+      }
+      return new Response(JSON.stringify({
+        scanned: rows.length, repaired, deleted, dry_run: dryRun, collisions
+      }, null, 2), { headers: { "Content-Type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message, stack: (e.stack || "").split("\n").slice(0, 5) }, null, 2), {
+          status: 500, headers: { "Content-Type": "application/json" }
+        });
+      }
+    }
+
+    // Admin: probe a single URL and return the raw response info. Diagnostic.
+    if (url.pathname === "/admin/probe-one" && request.method === "POST") {
+      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401, headers: { "Content-Type": "application/json" }
+        });
+      }
+      const target = url.searchParams.get("url");
+      if (!target) return new Response(JSON.stringify({ error: "url required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      const result = await probeOneServer({ url: target });
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Admin: trigger a probe batch immediately (token-gated). Used to verify
+    // probing works without waiting for the next cron tick.
+    if (url.pathname === "/admin/probe-now" && request.method === "POST") {
+      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401, headers: { "Content-Type": "application/json" }
+        });
+      }
+      const max = Math.min(parseInt(url.searchParams.get("max") || "25"), 100);
+      const result = await runProbeBatch(db, max);
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    // Admin: backfill categories for 'other'/'uncategorized' servers using inferCategory().
+    // Token-gated via env.ADMIN_TOKEN. Processes one batch per call so it stays under
+    // Worker CPU limits — caller paginates by passing offset.
+    if (url.pathname === "/admin/recategorize" && request.method === "POST") {
+      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
+      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401, headers: { "Content-Type": "application/json" }
+        });
+      }
+      const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1000);
+      const afterId = parseInt(url.searchParams.get("after_id") || "0");
+      const dryRun = url.searchParams.get("dry_run") === "1";
+      const rows = await db.prepare(
+        "SELECT id, name, description, url FROM servers WHERE category IN ('other', 'uncategorized') AND id > ? ORDER BY id LIMIT ?"
+      ).bind(afterId, batchSize).all();
+      const candidates = rows.results || [];
+      const updates = [];
+      const counts = {};
+      let lastId = afterId;
+      for (const row of candidates) {
+        if (row.id > lastId) lastId = row.id;
+        const newCat = inferCategory(row.name, row.description, row.url);
+        if (newCat) {
+          updates.push({ id: row.id, category: newCat });
+          counts[newCat] = (counts[newCat] || 0) + 1;
+        }
+      }
+      let updated = 0;
+      if (!dryRun && updates.length > 0) {
+        // Batch UPDATE via D1 transactional batch.
+        const stmts = updates.map(u =>
+          db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
+        );
+        const results = await db.batch(stmts);
+        updated = results.reduce((acc, r) => acc + (r.meta?.changes || 0), 0);
+      }
+      const remaining = await db.prepare(
+        "SELECT COUNT(*) as c FROM servers WHERE category IN ('other', 'uncategorized')"
+      ).first();
+      return new Response(JSON.stringify({
+        scanned: candidates.length,
+        matched: updates.length,
+        updated,
+        dry_run: dryRun,
+        next_after_id: lastId,
+        done: candidates.length < batchSize,
+        remaining_generic: remaining?.c || 0,
+        category_counts_this_batch: counts
+      }, null, 2), {
         headers: { "Content-Type": "application/json" }
       });
     }
