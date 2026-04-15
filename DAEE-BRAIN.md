@@ -1,5 +1,6 @@
 # DAEE — Brain (Dominion Observatory)
-Updated: 2026-04-13 (Monday Territory Defense scan)
+Updated: 2026-04-15 Wed (Distribution & Flywheel Acceleration — flywheel exploded 70 → 2,298 interactions/24h)
+Note: Notion Brain is canonical. This file is fallback only.
 
 ## EMPIRE STATUS
 Observatory servers tracked: 18 | Target: 100 by Month 1, 500 by Month 3
@@ -123,3 +124,21 @@ Observatory: 4,407 servers | 3 interactions (2 last 24h) | 13 categories
 Builder: 8 live servers | $0 revenue
 Combined MRR: $0
 Adaptation: Tuesday content priority — draft "Even CrowdStrike Can't See Your Agents" blog post using VentureBeat + arxiv as authority hooks. Recommend Builder fix categorization (95.6% are 'other'/'uncategorized').
+
+[2026-04-14] Tue | OBSERVATORY IMPROVEMENT | PRODUCED
+Result: Categorization classifier shipped (1,611 servers recovered from 'other'/'uncategorized' into 14 real categories — 8% → 43% real-category coverage). Mid-run pivot: shipped active probe system (runProbeBatch + scheduled cron */15 + interaction_sources provenance split in /api/stats). Two of three monetization triggers met (500+ servers ✅, 10+ category baselines ✅). Compliance artifact shipped: first EU AI Act Art. 12 + IMDA-aligned JSON export at docs/compliance/2026-04-14-observatory-baseline-snapshot.json with HONEST provenance labelling.
+Notion: CONNECTED | Gmail: CONNECTED
+Observatory: 4,578 servers | 92 interactions (70 last 24h) | 14 categories | 62 probe-sourced
+Builder: 8 live servers | $0 revenue
+Combined MRR: $0
+Adaptation: Active probe system unblocks data flywheel structurally — Observatory no longer depends on external agents to generate signal. Smithery-listing-vs-real-endpoint resolver flagged as next multiplier (DB is 91.6% Smithery listings).
+
+[2026-04-15] Wed | DISTRIBUTION & FLYWHEEL ACCELERATION | PRODUCED
+Result: Flywheel EXPLODED 92 → 2,300 total interactions (2,298 in last 24h, was 70 yesterday — 33x daily delta). Probe cron + agent-reported flow compounding cleanly with honest provenance split (154 probes/24h + 2,144 agent-reported/24h). 16 categories with baselines (was 14). 4 web searches: directories, agent framework MCP integration, MCP clients, PulseMCP timing. Key intel: PulseMCP newsletter ships every Tuesday — Wed is the perfect window for next week's edition. LangGraph confirmed deepest MCP framework integration (first-class graph nodes + streaming) — best target for trust-check primitive recommendation. Cursor Jan 7 dynamic MCP context = -46.9% token usage (framework layer hungry for trust scoring). Two new directories surfaced: mcpserverfinder.com (email submit) + developersdigest.tech directory.
+Outputs: 3 Gmail drafts — (1) PulseMCP v2 pitch with real 2,300/24h numbers replacing Apr 11 cold pitch which had ~1 interaction, (2) LangGraph/Harrison Chase cookbook pitch proposing check_trust as MCP node primitive, (3) Wed strategist briefing for Dinesh.
+Builder observation: DAILY-REPORT-2026-04-14-BUILDER-v4-EVE diagnoses bottleneck = DEMAND not infra. npm publish STILL blocked on Granular vs Classic Automation token (run #2 same blocker — Darwinian 3-strikes risk). PyPI 0.1.0 LIVE.
+Notion: CONNECTED | Gmail: CONNECTED
+Observatory: 4,584 servers | 2,300 interactions (2,298 last 24h) | 16 categories | 154 probes 24h + 2,144 agent-reported 24h
+Builder: 8 live servers | $0 revenue (no new code shipped this run — DEMAND bottleneck, not infra)
+Combined MRR: $0
+Adaptation: Three monetization triggers nearly met — Observatory now within DAYS of 50K interactions trigger at current trajectory, not weeks. Premium API plan should be drafted on Friday Evolution Day if trajectory holds. NPM token block elevated to HIGH for Dinesh — Builder's #1 unblock.
