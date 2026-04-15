@@ -802,9 +802,75 @@ async function handleObservatoryStats(db) {
      FROM interactions WHERE timestamp > datetime('now', '-24 hours')`
   ).first();
 
+  // HONEST DEMAND SPLIT (2026-04-15 post-retraction fix).
+  // `agent_reported_total` is inflated by Builder's flywheel-keeper cron, which
+  // writes ~1,000+ _keeper_healthcheck rows/day through /api/report with
+  // agent_id='anonymous'. Treating that as "external demand" is the exact trap
+  // that caused the Apr 15 Wed strategist misread. These fields classify a row
+  // as EXTERNAL only if it is NOT produced by Observatory's own probe cron AND
+  // NOT produced by Builder's flywheel-keeper (by tool-name prefix) AND NOT
+  // the default 'anonymous' agent_id (which Builder and unconfigured callers share).
+  // The SDK, when it ships, MUST set a non-'anonymous' agent_id for installs
+  // to be visible as demand here. Any future internal agent_id must be appended
+  // to INTERNAL_AGENT_IDS below.
+  const INTERNAL_AGENT_IDS_SQL = "('observatory_probe', 'anonymous')";
+  const INTERNAL_TOOL_PREFIX_SQL = "i.tool_name LIKE '\\_keeper%' ESCAPE '\\'";
+
+  const externalTotal = await db.prepare(
+    `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
+       FROM interactions i
+      WHERE agent_id NOT IN ${INTERNAL_AGENT_IDS_SQL}
+        AND NOT ${INTERNAL_TOOL_PREFIX_SQL}`
+  ).first();
+
+  const external24h = await db.prepare(
+    `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
+       FROM interactions i
+      WHERE agent_id NOT IN ${INTERNAL_AGENT_IDS_SQL}
+        AND NOT ${INTERNAL_TOOL_PREFIX_SQL}
+        AND timestamp > datetime('now', '-24 hours')`
+  ).first();
+
+  // Internal provenance breakdown — what IS in the 'agent_reported' bucket.
+  const internalBreakdown = await db.prepare(
+    `SELECT
+       SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as observatory_probe,
+       SUM(CASE WHEN i.tool_name LIKE '\\_keeper%' ESCAPE '\\' THEN 1 ELSE 0 END) as flywheel_keeper,
+       SUM(CASE WHEN agent_id = 'anonymous' AND NOT (i.tool_name LIKE '\\_keeper%' ESCAPE '\\') THEN 1 ELSE 0 END) as anonymous_non_keeper
+     FROM interactions i`
+  ).first();
+
+  const extInteractions24h = external24h?.n || 0;
+  const extAgents24h = external24h?.distinct_agents || 0;
+  const extInteractionsTotal = externalTotal?.n || 0;
+  const extAgentsTotal = externalTotal?.distinct_agents || 0;
+
+  // Market-validation gate per Brain monetization trigger rewrite
+  // (2026-04-15 post-retraction). Thresholds:
+  //   >=10,000 externally-reported rows AND >=20 distinct external agent_ids.
+  // Status surfaces on the FRONT of /api/stats so no downstream consumer can
+  // mistake Builder self-measurement for demand again.
+  let marketValidationStatus;
+  if (extInteractionsTotal === 0 && extAgentsTotal === 0) {
+    marketValidationStatus = "ZERO_EXTERNAL_DEMAND: no externally-reported interactions recorded. Dataset is 100% Observatory probes + Builder flywheel-keeper self-measurement. Phase = DATA_ACCUMULATION.";
+  } else if (extInteractionsTotal < 10000 || extAgentsTotal < 20) {
+    marketValidationStatus = `EARLY_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Below monetization floor (>=10,000 rows AND >=20 distinct agents). Phase = DATA_ACCUMULATION.`;
+  } else {
+    marketValidationStatus = `VALIDATED_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Monetization floor met. Phase = MONETIZATION_READY.`;
+  }
+
   return {
     observatory: "Dominion Observatory",
-    version: "1.1.0",
+    version: "1.2.0",
+    market_validation_status: marketValidationStatus,
+    external_demand: {
+      external_interactions_total: extInteractionsTotal,
+      external_interactions_24h: extInteractions24h,
+      distinct_external_agents_total: extAgentsTotal,
+      distinct_external_agents_24h: extAgents24h,
+      monetization_floor: { interactions: 10000, distinct_agents: 20 },
+      classification_rule: "external = (agent_id NOT IN ('observatory_probe','anonymous')) AND (tool_name NOT LIKE '_keeper%')"
+    },
     total_servers_tracked: stats?.total_servers || 0,
     total_interactions_recorded: stats?.total_interactions || 0,
     average_trust_score: stats?.avg_trust_score ? Math.round(stats.avg_trust_score * 10) / 10 : null,
@@ -813,11 +879,17 @@ async function handleObservatoryStats(db) {
       observatory_probes_total: sourceSplit?.probes || 0,
       agent_reported_total: sourceSplit?.agent_reported || 0,
       observatory_probes_24h: recentSplit?.probes_24h || 0,
-      agent_reported_24h: recentSplit?.agent_reported_24h || 0
+      agent_reported_24h: recentSplit?.agent_reported_24h || 0,
+      WARNING: "agent_reported_total is a 'posted to /api/report' counter, NOT a demand signal. It includes Builder's flywheel-keeper cron. For real demand, read external_demand.external_interactions_total instead."
+    },
+    internal_provenance_breakdown: {
+      observatory_probe_rows: internalBreakdown?.observatory_probe || 0,
+      flywheel_keeper_rows: internalBreakdown?.flywheel_keeper || 0,
+      anonymous_non_keeper_rows: internalBreakdown?.anonymous_non_keeper || 0
     },
     categories: (categories.results || []).map(c => ({ name: c.category, servers: c.count })),
     data_collection_started: "2026-04-08",
-    message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines."
+    message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines. external_demand fields expose REAL external usage — the only number that matters for monetization."
   };
 }
 
