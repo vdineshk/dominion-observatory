@@ -1093,7 +1093,7 @@ __name(escapeHtml, "escapeHtml");
 var TOOLS = [
   {
     name: "check_trust",
-    description: "Get the trust score and reliability metrics for any MCP server. Use this BEFORE calling an unknown MCP server to assess if it's reliable. Returns trust_score (0-100), latency stats, uptime, success rate, and how many agents have used it. Scores above 70 indicate reliable servers. Scores below 30 indicate risky servers.",
+    description: "Returns trust and reliability metrics for an MCP server URL so an agent can refuse or reroute risky servers before it calls them. Call BEFORE every invocation of an unknown server. Returns {found (bool), trust_score (0-100 int or null), latency_p50_ms, latency_p95_ms, success_rate (0.0-1.0), uptime (0.0-1.0), total_reports (int), reporting_agents (int), last_seen (ISO timestamp), message (string when found=false)}. Decision rule: trust_score >= 70 reliable, 30-69 caution, < 30 risky. Example: check_trust({server_url: \"https://api.brave-search.workers.dev/mcp\"}) -> {found: true, trust_score: 82, latency_p50_ms: 240, success_rate: 0.98, total_reports: 418}.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1107,7 +1107,7 @@ var TOOLS = [
   },
   {
     name: "report_interaction",
-    description: "Report the outcome of calling an MCP server. Call this AFTER you use any MCP server to contribute to the trust network. Your report helps other agents make better decisions. This is free and takes <1ms.",
+    description: "Records the outcome of a single MCP tool call into the cross-ecosystem trust network, updating the server's trust score in real time. Call AFTER every MCP tool invocation; latency is sub-millisecond, no authentication, free. Required: server_url (string), success (bool). Optional: latency_ms (number), tool_name (string), error_type (one of: timeout, auth_error, invalid_response, server_error, rate_limited, schema_mismatch), error_message (string), http_status (int). Returns {recorded (bool), server_trust_score (int), total_reports (int)}. Example: report_interaction({server_url: \"https://api.brave-search.workers.dev/mcp\", success: true, latency_ms: 240, tool_name: \"brave_web_search\", http_status: 200}).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1145,7 +1145,7 @@ var TOOLS = [
   },
   {
     name: "get_leaderboard",
-    description: "Get the top-rated MCP servers, optionally filtered by category. Use this to discover the most reliable MCP servers in the ecosystem. Categories include: weather, finance, code, data, search, compliance, transport, productivity, communication.",
+    description: "Returns top-ranked MCP servers by trust_score, optionally filtered to one category. Use to route an agent to the most reliable server for a task when the specific URL is unknown. Optional: category (string), limit (int, default 10, max 50). Valid categories: weather, finance, code, data, search, compliance, transport, productivity, communication, media, education, security, health, other. Returns [{rank (int), server_url (string), name (string), category (string), trust_score (int), total_reports (int), avg_latency_ms (number)}]. Example: get_leaderboard({category: \"weather\", limit: 5}) -> [{rank: 1, server_url: \"https://openweather.mcp/mcp\", trust_score: 91, total_reports: 418}, ...].",
     inputSchema: {
       type: "object",
       properties: {
@@ -1162,7 +1162,7 @@ var TOOLS = [
   },
   {
     name: "get_baselines",
-    description: "Get behavioral baselines for a tool category. Shows what 'normal' looks like \u2014 average latency, success rates, typical call patterns. Use this to evaluate whether a specific server's performance is within normal range for its category.",
+    description: "Returns empirical behavioral baselines for a tool category across all tracked servers, defining what 'normal' means for that category. Use to judge whether an observed measurement is within normal range before deciding a server is broken. Required: category (string). Returns {category (string), servers_observed (int), avg_latency_ms (number), p95_latency_ms (number), typical_success_rate (0.0-1.0), total_reports (int), last_updated (ISO timestamp)}. Example: get_baselines({category: \"search\"}) -> {avg_latency_ms: 312, typical_success_rate: 0.96, servers_observed: 367, total_reports: 4820}.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1176,7 +1176,7 @@ var TOOLS = [
   },
   {
     name: "check_anomaly",
-    description: "Check if observed behavior from an MCP server is anomalous compared to baselines. Use this when a server seems slow, unreliable, or returns unexpected results. Returns whether the behavior deviates significantly from normal patterns.",
+    description: "Compares an observed measurement of an MCP server against the category baseline and flags statistically significant deviation, so an agent can stop routing to a degrading server. Required: server_url (string). Optional: observed_latency_ms (number), observed_success_rate (0.0-1.0). Returns {is_anomaly (bool), deviation_score (0-100, higher = more anomalous), signals: [{metric (string), expected (number), observed (number), z_score (number)}], recommendation (string)}. Example: check_anomaly({server_url: \"https://example.mcp/mcp\", observed_latency_ms: 4800, observed_success_rate: 0.62}) -> {is_anomaly: true, deviation_score: 78, recommendation: \"stop routing to this server for 15 min\"}.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1198,7 +1198,7 @@ var TOOLS = [
   },
   {
     name: "register_server",
-    description: "Register a new MCP server in the observatory. Server owners can register their servers to start building a trust score. Registration is free.",
+    description: "Registers a new MCP server in the Observatory so it can accumulate a trust score and appear on leaderboards. Call once per server at first discovery; idempotent on server_url. Required: server_url (string), name (string). Optional: description (string), category (one of: weather, finance, code, data, search, compliance, transport, productivity, communication, media, education, security, health, other), github_url (string, enriches static score). Returns {registered (bool), server_url (string), initial_trust_score (int or null), server_id (string)}. Example: register_server({server_url: \"https://weather.example.workers.dev/mcp\", name: \"OpenWeather MCP\", category: \"weather\", github_url: \"https://github.com/example/openweather-mcp\"}).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1228,7 +1228,7 @@ var TOOLS = [
   },
   {
     name: "get_server_history",
-    description: "Get daily trust score and performance history for a server over the last 30 days. Use this to see trends \u2014 is the server improving or degrading?",
+    description: "Returns daily trust_score and performance history for a specific MCP server over the last 30 days, so an agent can judge trajectory (improving, stable, degrading) rather than a single snapshot. Required: server_url (string). Returns {server_url (string), days: [{date (YYYY-MM-DD), trust_score (int), avg_latency_ms (number), success_rate (0.0-1.0), reports (int)}], trend (one of: improving, stable, degrading), trust_score_delta_30d (int)}. Example: get_server_history({server_url: \"https://example.mcp/mcp\"}) -> {trend: \"degrading\", trust_score_delta_30d: -14, days: [{date: \"2026-04-17\", trust_score: 58, ...}, ...]}.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1242,7 +1242,7 @@ var TOOLS = [
   },
   {
     name: "observatory_stats",
-    description: "Get overall statistics about the Dominion Observatory \u2014 total servers tracked, total interactions recorded, coverage by category, and data freshness. Use this to understand the scope of the trust network.",
+    description: "Returns Observatory-wide aggregate statistics: scope and data freshness of the entire cross-ecosystem trust network. Call once when first connecting so the agent knows how many servers are trackable and how fresh the baselines are. No parameters. Returns {total_servers_tracked (int), total_interactions_recorded (int), interactions_last_24h (int), categories: [{name (string), servers (int)}], average_trust_score (number), external_demand: {external_interactions_total (int), distinct_external_agents_total (int)}, data_collection_started (YYYY-MM-DD)}. Example: observatory_stats() -> {total_servers_tracked: 4584, total_interactions_recorded: 7090, categories: [{name: \"search\", servers: 367}, {name: \"code\", servers: 317}, ...]}.",
     inputSchema: {
       type: "object",
       properties: {}
@@ -1250,7 +1250,7 @@ var TOOLS = [
   },
   {
     name: "get_compliance_report",
-    description: "Export a compliance-ready audit trail of all recorded interactions. Formatted for EU AI Act Article 12 and Singapore IMDA Agentic AI Governance Framework. Filter by server, agent, or date range. Essential for enterprises that need to prove their AI agents are behaving correctly.",
+    description: "Exports an EU AI Act Article 12 and Singapore IMDA Agentic AI Governance-formatted audit trail of MCP interactions. Each row is a non-repudiable record with timestamp, agent_id, server_url, tool_name, success, latency_ms, http_status. Use when your deployment must prove agent behavior to a regulator or internal auditor. All parameters optional; omit all to export the full trail. Optional: server_url (string, filter), agent_id (string, filter), start_date (YYYY-MM-DD), end_date (YYYY-MM-DD). Returns {report_format: \"eu_ai_act_article_12\", row_count (int), rows: [{timestamp (ISO), agent_id, server_url, tool_name, success, latency_ms, http_status}], attestation_hash (string)}. Example: get_compliance_report({agent_id: \"my-agent\", start_date: \"2026-04-01\", end_date: \"2026-04-30\"}).",
     inputSchema: {
       type: "object",
       properties: {
@@ -1480,7 +1480,6 @@ async function handleCheckAnomaly(db, params) {
     recommendation: anomalies.length > 0 ? "Consider using an alternative server or retrying later." : "Server behavior appears normal."
   };
 }
-<<<<<<< HEAD
 
 // ============================================================
 // CATEGORY INFERENCE
@@ -1489,10 +1488,6 @@ async function handleCheckAnomaly(db, params) {
 // Order matters: more specific categories come first.
 // ============================================================
 const CATEGORY_PATTERNS = [
-=======
-__name(handleCheckAnomaly, "handleCheckAnomaly");
-var CATEGORY_PATTERNS = [
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   // Weather is a small but valuable category — match early.
   ["weather", /\b(weather|forecast|meteo|climate|noaa|ipma|temperature|precipitation)\b/i],
   // Finance / payments / commerce
@@ -1518,7 +1513,6 @@ var CATEGORY_PATTERNS = [
   // Security / scanning / auth / secrets
   ["security", /\b(security|vulnerability|cve|sast|dast|pentest|penetration|firewall|waf|auth|authentication|oauth|saml|sso|2fa|mfa|secret|vault|kms|encryption|tls|certificate|password|owasp|exposure)\b/i],
   // Health / fitness / wellness
-<<<<<<< HEAD
   ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i],
 ];
 
@@ -1526,13 +1520,6 @@ function inferCategory(name, description, url) {
   const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
   if (!haystack.trim()) return null;
   // Reject pure test/demo entries — they should not pollute real categories.
-=======
-  ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i]
-];
-function inferCategory(name, description, url) {
-  const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
-  if (!haystack.trim()) return null;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   if (/^(test|echo|demo|sample|hello world|mcp-test|example|placeholder)$/i.test((name || "").trim())) {
     return "test";
   }
@@ -1541,7 +1528,6 @@ function inferCategory(name, description, url) {
   }
   return null;
 }
-<<<<<<< HEAD
 
 // Categories the classifier should overwrite (anything generic counts as "needs work").
 const GENERIC_CATEGORIES = new Set(["other", "uncategorized", null, "", undefined]);
@@ -1571,21 +1557,6 @@ function isProbableEndpoint(url) {
   if (url.includes("glama.ai/mcp/servers/")) return false; // glama listing
   if (url.includes("mcp.so/server/")) return false; // mcp.so listing
   // Must parse as a real URL with http(s) scheme.
-=======
-__name(inferCategory, "inferCategory");
-var GENERIC_CATEGORIES = /* @__PURE__ */ new Set(["other", "uncategorized", null, "", void 0]);
-function isProbableEndpoint(url) {
-  if (!url) return false;
-  if (url.includes("dominion-observatory")) return false;
-  if (url.includes("sgdata.workers.dev")) return false;
-  if (url.startsWith("|")) return false;
-  if (url.includes("github.com/")) return false;
-  if (url.includes("example.com")) return false;
-  if (url.includes("smithery.ai/server/")) return false;
-  if (url.includes("apitracker.io/mcp-server/")) return false;
-  if (url.includes("glama.ai/mcp/servers/")) return false;
-  if (url.includes("mcp.so/server/")) return false;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   try {
     const u = new URL(url);
     if (u.protocol !== "https:" && u.protocol !== "http:") return false;
@@ -1594,7 +1565,6 @@ function isProbableEndpoint(url) {
   }
   return /workers\.dev|vercel\.app|fly\.io|run\.app|herokuapp\.com|onrender\.com|railway\.app|deno\.dev|\/mcp(\?|$|\/)/i.test(url);
 }
-<<<<<<< HEAD
 
 async function probeOneServer(server) {
   const start = Date.now();
@@ -1603,15 +1573,6 @@ async function probeOneServer(server) {
     const isMcp = server.url.includes("/mcp");
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 5000);
-=======
-__name(isProbableEndpoint, "isProbableEndpoint");
-async function probeOneServer(server) {
-  const start = Date.now();
-  try {
-    const isMcp = server.url.includes("/mcp");
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 5e3);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     let res;
     if (isMcp) {
       res = await fetch(server.url, {
@@ -1634,21 +1595,13 @@ async function probeOneServer(server) {
     }
     clearTimeout(timeout);
     const latency = Date.now() - start;
-<<<<<<< HEAD
     const ok = res.status >= 200 && res.status < 500; // 4xx still means server is alive
-=======
-    const ok = res.status >= 200 && res.status < 500;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     const success = res.status >= 200 && res.status < 400;
     return {
       success,
       latency_ms: latency,
       http_status: res.status,
-<<<<<<< HEAD
       error_type: success ? null : (res.status >= 500 ? "server_error" : "client_error"),
-=======
-      error_type: success ? null : res.status >= 500 ? "server_error" : "client_error",
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       error_message: success ? null : `HTTP ${res.status}`
     };
   } catch (e) {
@@ -1663,7 +1616,6 @@ async function probeOneServer(server) {
     };
   }
 }
-<<<<<<< HEAD
 
 // Probe up to `max` due servers. Records each as an interaction via the existing
 // handleReportInteraction path so trust scores update consistently.
@@ -1671,10 +1623,6 @@ async function runProbeBatch(db, max = 25) {
   // Pick servers that look probable, oldest-checked first (round-robin).
   // Pull more than `max` so JS-side isProbableEndpoint() filtering still leaves
   // a full batch even when many SQL hits get rejected by the stricter JS filter.
-=======
-__name(probeOneServer, "probeOneServer");
-async function runProbeBatch(db, max = 25) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const rows = await db.prepare(
     `SELECT id, url, name FROM servers
      WHERE (url LIKE '%workers.dev%'
@@ -1697,25 +1645,16 @@ async function runProbeBatch(db, max = 25) {
      ORDER BY COALESCE(last_checked, '1970-01-01') ASC
      LIMIT ?`
   ).bind(max * 8).all();
-<<<<<<< HEAD
   const candidates = (rows.results || []).filter(s => isProbableEndpoint(s.url)).slice(0, max);
   if (candidates.length === 0) return { probed: 0, ok: 0, fail: 0 };
 
   const results = await Promise.all(candidates.map(s => probeOneServer(s)));
-=======
-  const candidates = (rows.results || []).filter((s) => isProbableEndpoint(s.url)).slice(0, max);
-  if (candidates.length === 0) return { probed: 0, ok: 0, fail: 0 };
-  const results = await Promise.all(candidates.map((s) => probeOneServer(s)));
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   let ok = 0;
   for (let i = 0; i < candidates.length; i++) {
     const s = candidates[i];
     const r = results[i];
     if (r.success) ok++;
-<<<<<<< HEAD
     // Use the existing report path so trust score / runtime score / last_checked update consistently.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     await handleReportInteraction(db, {
       server_url: s.url,
       success: r.success,
@@ -1725,26 +1664,16 @@ async function runProbeBatch(db, max = 25) {
       error_message: r.error_message,
       http_status: r.http_status,
       agent_id: "observatory_probe"
-<<<<<<< HEAD
     }).catch(() => { /* never let one failure poison the batch */ });
   }
   return { probed: candidates.length, ok, fail: candidates.length - ok };
 }
 
-=======
-    }).catch(() => {
-    });
-  }
-  return { probed: candidates.length, ok, fail: candidates.length - ok };
-}
-__name(runProbeBatch, "runProbeBatch");
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
 async function handleRegisterServer(db, params) {
   const { server_url, name, description, category, github_url } = params;
   if (server_url && server_url.includes("dominion-observatory")) {
     return { registered: false, error: "Observatory cannot track itself. This creates circular data." };
   }
-<<<<<<< HEAD
 
   // Resolve final category: caller-supplied wins if specific, otherwise infer.
   let finalCategory = category;
@@ -1752,39 +1681,23 @@ async function handleRegisterServer(db, params) {
     finalCategory = inferCategory(name, description, server_url) || finalCategory || 'uncategorized';
   }
 
-=======
-  let finalCategory = category;
-  if (GENERIC_CATEGORIES.has(finalCategory)) {
-    finalCategory = inferCategory(name, description, server_url) || finalCategory || "uncategorized";
-  }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const existing = await db.prepare("SELECT id FROM servers WHERE url = ?").bind(server_url).first();
   if (existing) {
     await db.prepare(
       "UPDATE servers SET name = COALESCE(?, name), description = COALESCE(?, description), category = COALESCE(?, category), github_url = COALESCE(?, github_url) WHERE url = ?"
     ).bind(name, description || null, finalCategory || null, github_url || null, server_url).run();
-<<<<<<< HEAD
 
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     return { registered: true, updated: true, server_url, category: finalCategory, message: "Server profile updated." };
   }
   let staticScore = 50;
   if (github_url) staticScore += 10;
   if (description && description.length > 50) staticScore += 10;
-<<<<<<< HEAD
   if (finalCategory && finalCategory !== 'other' && finalCategory !== 'uncategorized') staticScore += 5;
 
   await db.prepare(
     "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
   ).bind(server_url, name, description || null, finalCategory || 'uncategorized', github_url || null, staticScore, staticScore).run();
 
-=======
-  if (finalCategory && finalCategory !== "other" && finalCategory !== "uncategorized") staticScore += 5;
-  await db.prepare(
-    "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).bind(server_url, name, description || null, finalCategory || "uncategorized", github_url || null, staticScore, staticScore).run();
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   return {
     registered: true,
     updated: false,
@@ -1828,28 +1741,21 @@ async function handleObservatoryStats(db) {
   const recentActivity = await db.prepare(
     "SELECT COUNT(*) as count FROM interactions WHERE timestamp > datetime('now', '-24 hours')"
   ).first();
-<<<<<<< HEAD
 
   // Honest split: probe-generated data vs. agent-reported data.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const sourceSplit = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes,
        SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported
      FROM interactions`
   ).first();
-<<<<<<< HEAD
 
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const recentSplit = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes_24h,
        SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported_24h
      FROM interactions WHERE timestamp > datetime('now', '-24 hours')`
   ).first();
-<<<<<<< HEAD
 
   // HONEST DEMAND SPLIT (2026-04-15 post-retraction fix).
   // `agent_reported_total` is inflated by Builder's flywheel-keeper cron, which
@@ -1865,20 +1771,13 @@ async function handleObservatoryStats(db) {
   const INTERNAL_AGENT_IDS_SQL = "('observatory_probe', 'anonymous')";
   const INTERNAL_TOOL_PREFIX_SQL = "i.tool_name LIKE '\\_keeper%' ESCAPE '\\'";
 
-=======
-  const INTERNAL_AGENT_IDS_SQL = "('observatory_probe', 'anonymous')";
-  const INTERNAL_TOOL_PREFIX_SQL = "i.tool_name LIKE '\\_keeper%' ESCAPE '\\'";
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const externalTotal = await db.prepare(
     `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
        FROM interactions i
       WHERE agent_id NOT IN ${INTERNAL_AGENT_IDS_SQL}
         AND NOT ${INTERNAL_TOOL_PREFIX_SQL}`
   ).first();
-<<<<<<< HEAD
 
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const external24h = await db.prepare(
     `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
        FROM interactions i
@@ -1886,11 +1785,8 @@ async function handleObservatoryStats(db) {
         AND NOT ${INTERNAL_TOOL_PREFIX_SQL}
         AND timestamp > datetime('now', '-24 hours')`
   ).first();
-<<<<<<< HEAD
 
   // Internal provenance breakdown — what IS in the 'agent_reported' bucket.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const internalBreakdown = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as observatory_probe,
@@ -1898,15 +1794,11 @@ async function handleObservatoryStats(db) {
        SUM(CASE WHEN agent_id = 'anonymous' AND NOT (i.tool_name LIKE '\\_keeper%' ESCAPE '\\') THEN 1 ELSE 0 END) as anonymous_non_keeper
      FROM interactions i`
   ).first();
-<<<<<<< HEAD
 
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const extInteractions24h = external24h?.n || 0;
   const extAgents24h = external24h?.distinct_agents || 0;
   const extInteractionsTotal = externalTotal?.n || 0;
   const extAgentsTotal = externalTotal?.distinct_agents || 0;
-<<<<<<< HEAD
 
   // Market-validation gate per Brain monetization trigger rewrite
   // (2026-04-15 post-retraction). Thresholds:
@@ -1917,20 +1809,11 @@ async function handleObservatoryStats(db) {
   if (extInteractionsTotal === 0 && extAgentsTotal === 0) {
     marketValidationStatus = "ZERO_EXTERNAL_DEMAND: no externally-reported interactions recorded. Dataset is 100% Observatory probes + Builder flywheel-keeper self-measurement. Phase = DATA_ACCUMULATION.";
   } else if (extInteractionsTotal < 10000 || extAgentsTotal < 20) {
-=======
-  let marketValidationStatus;
-  if (extInteractionsTotal === 0 && extAgentsTotal === 0) {
-    marketValidationStatus = "ZERO_EXTERNAL_DEMAND: no externally-reported interactions recorded. Dataset is 100% Observatory probes + Builder flywheel-keeper self-measurement. Phase = DATA_ACCUMULATION.";
-  } else if (extInteractionsTotal < 1e4 || extAgentsTotal < 20) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     marketValidationStatus = `EARLY_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Below monetization floor (>=10,000 rows AND >=20 distinct agents). Phase = DATA_ACCUMULATION.`;
   } else {
     marketValidationStatus = `VALIDATED_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Monetization floor met. Phase = MONETIZATION_READY.`;
   }
-<<<<<<< HEAD
 
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   return {
     observatory: "Dominion Observatory",
     version: "1.2.0",
@@ -1940,11 +1823,7 @@ async function handleObservatoryStats(db) {
       external_interactions_24h: extInteractions24h,
       distinct_external_agents_total: extAgentsTotal,
       distinct_external_agents_24h: extAgents24h,
-<<<<<<< HEAD
       monetization_floor: { interactions: 10000, distinct_agents: 20 },
-=======
-      monetization_floor: { interactions: 1e4, distinct_agents: 20 },
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       classification_rule: "external = (agent_id NOT IN ('observatory_probe','anonymous')) AND (tool_name NOT LIKE '_keeper%')"
     },
     total_servers_tracked: stats?.total_servers || 0,
@@ -1963,15 +1842,9 @@ async function handleObservatoryStats(db) {
       flywheel_keeper_rows: internalBreakdown?.flywheel_keeper || 0,
       anonymous_non_keeper_rows: internalBreakdown?.anonymous_non_keeper || 0
     },
-<<<<<<< HEAD
     categories: (categories.results || []).map(c => ({ name: c.category, servers: c.count })),
     data_collection_started: "2026-04-08",
     message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines. external_demand fields expose REAL external usage — the only number that matters for monetization."
-=======
-    categories: (categories.results || []).map((c) => ({ name: c.category, servers: c.count })),
-    data_collection_started: "2026-04-08",
-    message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines. external_demand fields expose REAL external usage \u2014 the only number that matters for monetization."
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   };
 }
 __name(handleObservatoryStats, "handleObservatoryStats");
@@ -2201,91 +2074,30 @@ async function handleMCPRequest(request, db) {
     return respondError(-32603, `Internal error: ${err.message}`);
   }
 }
-<<<<<<< HEAD
 
 // ============================================================
 // MAIN WORKER EXPORT
 // ============================================================
 
 export default {
-=======
-__name(handleMCPRequest, "handleMCPRequest");
-var index_default = {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   // Cloudflare cron entry point. Configured in wrangler.jsonc.
   // Runs every 15 minutes; probes ~25 callable MCP endpoints per run.
   // Result: ~2,400 real probes/day = enough data for category baselines
   // independent of organic agent flywheel.
-<<<<<<< HEAD
   async scheduled(controller, env, ctx) {
     ctx.waitUntil((async () => {
       try {
         const result = await runProbeBatch(env.DB, 25);
-=======
-  async scheduled(controller, env2, ctx) {
-    const db = env2.DB;
-    // Probe batch (every 15 min)
-    ctx.waitUntil((async () => {
-      try {
-        const result = await runProbeBatch(db, 25);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         console.log("scheduled probe", JSON.stringify(result));
       } catch (e) {
         console.log("scheduled probe error", e.message);
       }
     })());
-<<<<<<< HEAD
   },
 
   async fetch(request, env, ctx) {
-=======
-    // Weekly report generation: Monday ~01:00 UTC (09:00 SGT)
-    ctx.waitUntil((async () => {
-      try {
-        const now = new Date();
-        if (now.getUTCDay() !== 1) return; // Monday only
-        if (now.getUTCHours() !== 1 || now.getUTCMinutes() > 15) return; // 01:00-01:15 UTC window
-        const reportDate = now.toISOString().split('T')[0];
-        const existing = await db.prepare("SELECT id FROM reports WHERE report_date = ?").bind(reportDate).first();
-        if (existing) return; // already generated today
-        // Ensure reports table exists
-        await db.prepare("CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, report_date TEXT UNIQUE NOT NULL, week_start TEXT NOT NULL, week_end TEXT NOT NULL, total_interactions INTEGER DEFAULT 0, external_interactions INTEGER DEFAULT 0, probe_interactions INTEGER DEFAULT 0, keeper_interactions INTEGER DEFAULT 0, new_servers_added INTEGER DEFAULT 0, categories_with_baselines INTEGER DEFAULT 0, top_reliable_servers TEXT, drift_incidents TEXT, category_updates TEXT, created_at TEXT DEFAULT (datetime('now')))").run();
-        const weekEnd = reportDate;
-        const weekStartDate = new Date(now); weekStartDate.setDate(weekStartDate.getDate() - 7);
-        const weekStart = weekStartDate.toISOString().split('T')[0];
-        // Gather stats for the week
-        const totalI = await db.prepare("SELECT COUNT(*) as n FROM interactions WHERE timestamp >= ? AND timestamp < ?").bind(weekStart, weekEnd).first();
-        const externalI = await db.prepare("SELECT COUNT(*) as n FROM interactions WHERE timestamp >= ? AND timestamp < ? AND agent_id NOT IN ('observatory_probe','anonymous','') AND agent_id IS NOT NULL AND tool_name NOT LIKE '%keeper%'").bind(weekStart, weekEnd).first();
-        const probeI = await db.prepare("SELECT COUNT(*) as n FROM interactions WHERE timestamp >= ? AND timestamp < ? AND agent_id = 'observatory_probe'").bind(weekStart, weekEnd).first();
-        const keeperI = await db.prepare("SELECT COUNT(*) as n FROM interactions WHERE timestamp >= ? AND timestamp < ? AND tool_name LIKE '%keeper%'").bind(weekStart, weekEnd).first();
-        const newServers = await db.prepare("SELECT COUNT(*) as n FROM servers WHERE first_seen >= ? AND first_seen < ?").bind(weekStart, weekEnd).first();
-        const catBaselines = await db.prepare("SELECT COUNT(DISTINCT category) as n FROM baselines").first();
-        const topReliable = await db.prepare("SELECT name, url, trust_score, total_calls FROM servers WHERE name IS NOT NULL AND name != '' ORDER BY trust_score DESC LIMIT 10").all();
-        await db.prepare(
-          "INSERT INTO reports (report_date, week_start, week_end, total_interactions, external_interactions, probe_interactions, keeper_interactions, new_servers_added, categories_with_baselines, top_reliable_servers, drift_incidents, category_updates) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        ).bind(
-          reportDate, weekStart, weekEnd,
-          totalI?.n || 0, externalI?.n || 0, probeI?.n || 0, keeperI?.n || 0,
-          newServers?.n || 0, catBaselines?.n || 0,
-          JSON.stringify((topReliable.results || []).map(s => ({ name: s.name, url: s.url, trust_score: Math.round(s.trust_score*10)/10, total_calls: s.total_calls }))),
-          JSON.stringify([]), JSON.stringify([])
-        ).run();
-        console.log("weekly report generated", reportDate);
-        // IndexNow notification
-        try {
-          const indexNowUrl = `https://api.indexnow.org/indexnow?url=${encodeURIComponent('https://dominion-observatory.sgdata.workers.dev/reports/' + reportDate)}&key=76e6a6b660ae4805acecfc644574aa87`;
-          await fetch(indexNowUrl);
-          console.log("IndexNow pinged for", reportDate);
-        } catch (e2) { console.log("IndexNow ping failed", e2.message); }
-      } catch (e) {
-        console.log("weekly report error", e.message);
-      }
-    })());
-  },
-  async fetch(request, env2, ctx) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     const url = new URL(request.url);
-    const db = env2.DB;
+    const db = env.DB;
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
@@ -2330,6 +2142,58 @@ Sitemap: ${url.origin}/sitemap.xml
         { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" } }
       );
     }
+    if (url.pathname === "/llms.txt") {
+      const origin = url.origin;
+      const body = `# Dominion Observatory
+
+> Cross-ecosystem behavioral trust layer for the Model Context Protocol (MCP) and AI agent economy. Tracks 4,500+ MCP servers, records agent-reported interactions, and publishes empirical trust baselines plus EU AI Act Article 12 and Singapore IMDA Agentic AI Governance compliance attestations. SDK-first data infrastructure — every install becomes a permanent cross-ecosystem telemetry pipeline.
+
+The Observatory is the only public source of agent-reported runtime behavioral telemetry for MCP servers. Static scorers (Glama, Smithery, MCP Scorecard, Nerq, Zarq) score code and metadata; Observatory scores what actually happens when agents call servers in production.
+
+## Core documentation
+- [Methodology](${origin}/methodology): How trust scores are computed — weighted blend of latency, success rate, uptime, report volume, and recency decay.
+- [Glossary](${origin}/glossary): Canonical MCP trust terminology — trust score, behavioral baseline, MCP drift, cross-ecosystem telemetry, compliance attestation, anomaly detection, observatory probe, agent-reported interaction, trust gate.
+- [Landing](${origin}/): Overview + navigation.
+
+## Live data surfaces (LLM-indexable HTML)
+- [All servers](${origin}/servers/): Per-server trust-score profile pages with latency percentiles, uptime, category, and recent interaction history.
+- [Baselines index](${origin}/baselines/): Per-category behavioral baselines — average latency, success rate, and typical call patterns across 16 categories.
+- [Reports index](${origin}/reports/): Dated daily reliability reports.
+
+## Machine-readable APIs
+- [GET /api/stats](${origin}/api/stats): Observatory-wide metrics — servers tracked, interactions recorded, external_demand split, category distribution. JSON.
+- [GET /api/trust?url=SERVER_URL](${origin}/api/trust): Trust score and reliability metrics for a specific MCP server. JSON.
+- [GET /api/leaderboard](${origin}/api/leaderboard): Top-rated MCP servers, optionally filterable by category. JSON.
+- [GET /api/compliance](${origin}/api/compliance): EU AI Act Article 12 + IMDA-formatted audit trail of recorded interactions. JSON.
+- [POST /api/report](${origin}/api/report): Agents report MCP-call outcomes (success, latency_ms, tool_name). Contributes to trust scores. JSON body, <1ms.
+- [POST /api/register](${origin}/api/register): Register a new MCP server in the Observatory. JSON body.
+- [POST /mcp](${origin}/mcp): Full MCP JSON-RPC server exposing 9 tools (check_trust, report_interaction, get_leaderboard, get_baselines, check_anomaly, register_server, get_server_history, observatory_stats, get_compliance_report).
+
+## Framework integrations (SDKs)
+- dominion-observatory (npm + PyPI): Universal SDK with required agent_id. All call-sites hit /api/report.
+- dominion-observatory-langchain (PyPI): LangChain BaseCallbackHandler subclass; pre-flight trust_gate blocks calls to low-trust MCP servers, post-call telemetry auto-reports to Observatory.
+
+## What agents should do
+- Call check_trust BEFORE invoking an unknown MCP server — scores above 70 are reliable, below 30 are risky.
+- Call report_interaction AFTER every MCP call — builds the cross-ecosystem baseline others rely on.
+- Use get_compliance_report to export audit trails when your deployment is under EU AI Act or IMDA obligations.
+
+## Positioning
+- What Observatory DOES: Cross-ecosystem, agent-reported runtime behavioral baselines + compliance-ready audit trails.
+- What Observatory DOES NOT: Static code analysis, directory listings, security scanning, hosted gateways. Observatory composes with signing-layer projects (AgentMint, asqav, Aira, APS, Signet) and scanning-layer projects (MCP Scorecard, Nerq, Zarq, ark-forge/mcp-eu-ai-act).
+
+## Authority & provenance
+- Data collection started: 2026-04-08. Every interaction row is auditable in /api/compliance.
+- Owner: Dinesh Kumar, Singapore. Contact via GitHub issues on vdineshk/dominion-observatory.
+`;
+      return new Response(body, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+          "X-Robots-Tag": "index, follow"
+        }
+      });
+    }
     if (url.pathname === "/sitemap.xml") {
       try {
         const origin = url.origin;
@@ -2339,7 +2203,8 @@ Sitemap: ${url.origin}/sitemap.xml
           { loc: "/glossary", priority: "0.7", changefreq: "monthly" },
           { loc: "/servers/", priority: "0.9", changefreq: "daily" },
           { loc: "/baselines/", priority: "0.8", changefreq: "daily" },
-          { loc: "/reports/", priority: "0.9", changefreq: "weekly" }
+          { loc: "/reports/", priority: "0.9", changefreq: "weekly" },
+          { loc: "/llms.txt", priority: "0.5", changefreq: "weekly" }
         ];
         const cats = await db.prepare(
           "SELECT DISTINCT category FROM servers WHERE category != 'uncategorized' AND category != 'other' ORDER BY category"
@@ -2868,7 +2733,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
 
     // Admin: clean up rows whose `url` field was polluted by a bad bulk import
     // (e.g., `|description|||https://real.url/mcp`). Either repair them by
@@ -2955,91 +2819,6 @@ Sitemap: ${url.origin}/sitemap.xml
       if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401, headers: { "Content-Type": "application/json" }
-=======
-    if (url.pathname === "/admin/clean-malformed-urls" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      try {
-        const dryRun = url.searchParams.get("dry_run") === "1";
-        const bad = await db.prepare("SELECT id, url FROM servers WHERE url LIKE '|%' LIMIT 200").all();
-        const rows = bad.results || [];
-        const updates = [];
-        const deletes = [];
-        const seenUrls = /* @__PURE__ */ new Set();
-        for (const row of rows) {
-          const m = row.url.match(/(https?:\/\/[^\s|]+)\s*$/);
-          if (m) {
-            const cleanUrl = m[1];
-            if (seenUrls.has(cleanUrl)) {
-              deletes.push(row.id);
-            } else {
-              seenUrls.add(cleanUrl);
-              updates.push({ id: row.id, url: cleanUrl });
-            }
-          } else {
-            deletes.push(row.id);
-          }
-        }
-        let repaired = 0;
-        let deleted = 0;
-        let collisions = 0;
-        if (!dryRun) {
-          if (updates.length > 0) {
-            const placeholders = updates.map(() => "?").join(",");
-            const existing = await db.prepare(
-              `SELECT url FROM servers WHERE url IN (${placeholders})`
-            ).bind(...updates.map((u) => u.url)).all();
-            const existingSet = new Set((existing.results || []).map((r) => r.url));
-            for (let i = updates.length - 1; i >= 0; i--) {
-              if (existingSet.has(updates[i].url)) {
-                deletes.push(updates[i].id);
-                updates.splice(i, 1);
-                collisions++;
-              }
-            }
-          }
-          const stmts = [];
-          for (const u of updates) {
-            stmts.push(db.prepare("UPDATE servers SET url = ? WHERE id = ?").bind(u.url, u.id));
-          }
-          for (const id of deletes) {
-            stmts.push(db.prepare("DELETE FROM servers WHERE id = ?").bind(id));
-          }
-          if (stmts.length > 0) {
-            const results = await db.batch(stmts);
-            repaired = results.slice(0, updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
-            deleted = results.slice(updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
-          }
-        } else {
-          repaired = updates.length;
-          deleted = deletes.length;
-        }
-        return new Response(JSON.stringify({
-          scanned: rows.length,
-          repaired,
-          deleted,
-          dry_run: dryRun,
-          collisions
-        }, null, 2), { headers: { "Content-Type": "application/json" } });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message, stack: (e.stack || "").split("\n").slice(0, 5) }, null, 2), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-    if (url.pathname === "/admin/probe-one" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         });
       }
       const target = url.searchParams.get("url");
@@ -3049,7 +2828,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
 
     // Admin: trigger a probe batch immediately (token-gated). Used to verify
     // probing works without waiting for the next cron tick.
@@ -3058,14 +2836,6 @@ Sitemap: ${url.origin}/sitemap.xml
       if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401, headers: { "Content-Type": "application/json" }
-=======
-    if (url.pathname === "/admin/probe-now" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         });
       }
       const max = Math.min(parseInt(url.searchParams.get("max") || "25"), 100);
@@ -3074,7 +2844,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
 
     // Admin: backfill categories for 'other'/'uncategorized' servers using inferCategory().
     // Token-gated via env.ADMIN_TOKEN. Processes one batch per call so it stays under
@@ -3087,17 +2856,6 @@ Sitemap: ${url.origin}/sitemap.xml
         });
       }
       const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1000);
-=======
-    if (url.pathname === "/admin/recategorize" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-      const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1e3);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       const afterId = parseInt(url.searchParams.get("after_id") || "0");
       const dryRun = url.searchParams.get("dry_run") === "1";
       const rows = await db.prepare(
@@ -3117,14 +2875,9 @@ Sitemap: ${url.origin}/sitemap.xml
       }
       let updated = 0;
       if (!dryRun && updates.length > 0) {
-<<<<<<< HEAD
         // Batch UPDATE via D1 transactional batch.
         const stmts = updates.map(u =>
           db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
-=======
-        const stmts = updates.map(
-          (u) => db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         );
         const results = await db.batch(stmts);
         updated = results.reduce((acc, r) => acc + (r.meta?.changes || 0), 0);
@@ -3145,11 +2898,8 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
 
     // MCP endpoint
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     if (url.pathname === "/mcp" && request.method === "POST") {
       return handleMCPRequest(request, db);
     }
@@ -3328,7 +3078,3 @@ Sitemap: ${url.origin}/sitemap.xml
     });
   }
 };
-export {
-  index_default as default
-};
-//# sourceMappingURL=index.js.map
