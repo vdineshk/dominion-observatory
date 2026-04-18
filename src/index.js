@@ -1480,19 +1480,8 @@ async function handleCheckAnomaly(db, params) {
     recommendation: anomalies.length > 0 ? "Consider using an alternative server or retrying later." : "Server behavior appears normal."
   };
 }
-<<<<<<< HEAD
-
-// ============================================================
-// CATEGORY INFERENCE
-// Keyword-based classifier — promotes 'other'/'uncategorized' servers
-// into real categories so baselines actually mean something.
-// Order matters: more specific categories come first.
-// ============================================================
-const CATEGORY_PATTERNS = [
-=======
 __name(handleCheckAnomaly, "handleCheckAnomaly");
 var CATEGORY_PATTERNS = [
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   // Weather is a small but valuable category — match early.
   ["weather", /\b(weather|forecast|meteo|climate|noaa|ipma|temperature|precipitation)\b/i],
   // Finance / payments / commerce
@@ -1518,21 +1507,11 @@ var CATEGORY_PATTERNS = [
   // Security / scanning / auth / secrets
   ["security", /\b(security|vulnerability|cve|sast|dast|pentest|penetration|firewall|waf|auth|authentication|oauth|saml|sso|2fa|mfa|secret|vault|kms|encryption|tls|certificate|password|owasp|exposure)\b/i],
   // Health / fitness / wellness
-<<<<<<< HEAD
-  ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i],
-];
-
-function inferCategory(name, description, url) {
-  const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
-  if (!haystack.trim()) return null;
-  // Reject pure test/demo entries — they should not pollute real categories.
-=======
   ["health", /\b(health|fitness|workout|strava|nutrition|diet|medical|doctor|hospital|patient|drug|medication|wellness|sleep|meditation)\b/i]
 ];
 function inferCategory(name, description, url) {
   const haystack = [name || "", description || "", url || ""].join(" ").toLowerCase();
   if (!haystack.trim()) return null;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   if (/^(test|echo|demo|sample|hello world|mcp-test|example|placeholder)$/i.test((name || "").trim())) {
     return "test";
   }
@@ -1541,37 +1520,6 @@ function inferCategory(name, description, url) {
   }
   return null;
 }
-<<<<<<< HEAD
-
-// Categories the classifier should overwrite (anything generic counts as "needs work").
-const GENERIC_CATEGORIES = new Set(["other", "uncategorized", null, "", undefined]);
-
-// ============================================================
-// ACTIVE PROBE
-// The Observatory observes. Without active probing, interaction count
-// depends entirely on external agents finding us — single point of failure.
-// Cron triggers this periodically to probe registered MCP endpoints,
-// recording real latency/success as interactions tagged agent_id='observatory_probe'.
-// ============================================================
-
-// Only probe URLs that look like real callable endpoints, not directory listing pages.
-function isProbableEndpoint(url) {
-  if (!url) return false;
-  if (url.includes("dominion-observatory")) return false; // never probe self
-  // Same-account Cloudflare Workers can't be reliably probed via public URL —
-  // Cloudflare routes the request back to the calling Worker's edge node and
-  // hits our own catch-all 404 (confirmed via /admin/probe-one diagnostic).
-  // These need to be probed externally or via service bindings, not here.
-  if (url.includes("sgdata.workers.dev")) return false;
-  if (url.startsWith("|")) return false; // malformed URL from bad bulk import (description leaked into url field)
-  if (url.includes("github.com/")) return false; // repo link, not an endpoint
-  if (url.includes("example.com")) return false; // placeholder
-  if (url.includes("smithery.ai/server/")) return false;  // smithery listing page, not endpoint
-  if (url.includes("apitracker.io/mcp-server/")) return false; // apitracker listing
-  if (url.includes("glama.ai/mcp/servers/")) return false; // glama listing
-  if (url.includes("mcp.so/server/")) return false; // mcp.so listing
-  // Must parse as a real URL with http(s) scheme.
-=======
 __name(inferCategory, "inferCategory");
 var GENERIC_CATEGORIES = /* @__PURE__ */ new Set(["other", "uncategorized", null, "", void 0]);
 function isProbableEndpoint(url) {
@@ -1585,7 +1533,6 @@ function isProbableEndpoint(url) {
   if (url.includes("apitracker.io/mcp-server/")) return false;
   if (url.includes("glama.ai/mcp/servers/")) return false;
   if (url.includes("mcp.so/server/")) return false;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   try {
     const u = new URL(url);
     if (u.protocol !== "https:" && u.protocol !== "http:") return false;
@@ -1594,16 +1541,6 @@ function isProbableEndpoint(url) {
   }
   return /workers\.dev|vercel\.app|fly\.io|run\.app|herokuapp\.com|onrender\.com|railway\.app|deno\.dev|\/mcp(\?|$|\/)/i.test(url);
 }
-<<<<<<< HEAD
-
-async function probeOneServer(server) {
-  const start = Date.now();
-  try {
-    // Prefer POST tools/list to /mcp (real MCP probe). Fall back to HEAD if not /mcp.
-    const isMcp = server.url.includes("/mcp");
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 5000);
-=======
 __name(isProbableEndpoint, "isProbableEndpoint");
 async function probeOneServer(server) {
   const start = Date.now();
@@ -1611,7 +1548,6 @@ async function probeOneServer(server) {
     const isMcp = server.url.includes("/mcp");
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 5e3);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     let res;
     if (isMcp) {
       res = await fetch(server.url, {
@@ -1634,21 +1570,13 @@ async function probeOneServer(server) {
     }
     clearTimeout(timeout);
     const latency = Date.now() - start;
-<<<<<<< HEAD
-    const ok = res.status >= 200 && res.status < 500; // 4xx still means server is alive
-=======
     const ok = res.status >= 200 && res.status < 500;
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     const success = res.status >= 200 && res.status < 400;
     return {
       success,
       latency_ms: latency,
       http_status: res.status,
-<<<<<<< HEAD
-      error_type: success ? null : (res.status >= 500 ? "server_error" : "client_error"),
-=======
       error_type: success ? null : res.status >= 500 ? "server_error" : "client_error",
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       error_message: success ? null : `HTTP ${res.status}`
     };
   } catch (e) {
@@ -1663,18 +1591,8 @@ async function probeOneServer(server) {
     };
   }
 }
-<<<<<<< HEAD
-
-// Probe up to `max` due servers. Records each as an interaction via the existing
-// handleReportInteraction path so trust scores update consistently.
-async function runProbeBatch(db, max = 25) {
-  // Pick servers that look probable, oldest-checked first (round-robin).
-  // Pull more than `max` so JS-side isProbableEndpoint() filtering still leaves
-  // a full batch even when many SQL hits get rejected by the stricter JS filter.
-=======
 __name(probeOneServer, "probeOneServer");
 async function runProbeBatch(db, max = 25) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const rows = await db.prepare(
     `SELECT id, url, name FROM servers
      WHERE (url LIKE '%workers.dev%'
@@ -1697,25 +1615,14 @@ async function runProbeBatch(db, max = 25) {
      ORDER BY COALESCE(last_checked, '1970-01-01') ASC
      LIMIT ?`
   ).bind(max * 8).all();
-<<<<<<< HEAD
-  const candidates = (rows.results || []).filter(s => isProbableEndpoint(s.url)).slice(0, max);
-  if (candidates.length === 0) return { probed: 0, ok: 0, fail: 0 };
-
-  const results = await Promise.all(candidates.map(s => probeOneServer(s)));
-=======
   const candidates = (rows.results || []).filter((s) => isProbableEndpoint(s.url)).slice(0, max);
   if (candidates.length === 0) return { probed: 0, ok: 0, fail: 0 };
   const results = await Promise.all(candidates.map((s) => probeOneServer(s)));
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   let ok = 0;
   for (let i = 0; i < candidates.length; i++) {
     const s = candidates[i];
     const r = results[i];
     if (r.success) ok++;
-<<<<<<< HEAD
-    // Use the existing report path so trust score / runtime score / last_checked update consistently.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     await handleReportInteraction(db, {
       server_url: s.url,
       success: r.success,
@@ -1725,66 +1632,35 @@ async function runProbeBatch(db, max = 25) {
       error_message: r.error_message,
       http_status: r.http_status,
       agent_id: "observatory_probe"
-<<<<<<< HEAD
-    }).catch(() => { /* never let one failure poison the batch */ });
-  }
-  return { probed: candidates.length, ok, fail: candidates.length - ok };
-}
-
-=======
     }).catch(() => {
     });
   }
   return { probed: candidates.length, ok, fail: candidates.length - ok };
 }
 __name(runProbeBatch, "runProbeBatch");
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
 async function handleRegisterServer(db, params) {
   const { server_url, name, description, category, github_url } = params;
   if (server_url && server_url.includes("dominion-observatory")) {
     return { registered: false, error: "Observatory cannot track itself. This creates circular data." };
   }
-<<<<<<< HEAD
-
-  // Resolve final category: caller-supplied wins if specific, otherwise infer.
-  let finalCategory = category;
-  if (GENERIC_CATEGORIES.has(finalCategory)) {
-    finalCategory = inferCategory(name, description, server_url) || finalCategory || 'uncategorized';
-  }
-
-=======
   let finalCategory = category;
   if (GENERIC_CATEGORIES.has(finalCategory)) {
     finalCategory = inferCategory(name, description, server_url) || finalCategory || "uncategorized";
   }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const existing = await db.prepare("SELECT id FROM servers WHERE url = ?").bind(server_url).first();
   if (existing) {
     await db.prepare(
       "UPDATE servers SET name = COALESCE(?, name), description = COALESCE(?, description), category = COALESCE(?, category), github_url = COALESCE(?, github_url) WHERE url = ?"
     ).bind(name, description || null, finalCategory || null, github_url || null, server_url).run();
-<<<<<<< HEAD
-
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     return { registered: true, updated: true, server_url, category: finalCategory, message: "Server profile updated." };
   }
   let staticScore = 50;
   if (github_url) staticScore += 10;
   if (description && description.length > 50) staticScore += 10;
-<<<<<<< HEAD
-  if (finalCategory && finalCategory !== 'other' && finalCategory !== 'uncategorized') staticScore += 5;
-
-  await db.prepare(
-    "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).bind(server_url, name, description || null, finalCategory || 'uncategorized', github_url || null, staticScore, staticScore).run();
-
-=======
   if (finalCategory && finalCategory !== "other" && finalCategory !== "uncategorized") staticScore += 5;
   await db.prepare(
     "INSERT INTO servers (url, name, description, category, github_url, static_score, trust_score) VALUES (?, ?, ?, ?, ?, ?, ?)"
   ).bind(server_url, name, description || null, finalCategory || "uncategorized", github_url || null, staticScore, staticScore).run();
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   return {
     registered: true,
     updated: false,
@@ -1828,57 +1704,26 @@ async function handleObservatoryStats(db) {
   const recentActivity = await db.prepare(
     "SELECT COUNT(*) as count FROM interactions WHERE timestamp > datetime('now', '-24 hours')"
   ).first();
-<<<<<<< HEAD
-
-  // Honest split: probe-generated data vs. agent-reported data.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const sourceSplit = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes,
        SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported
      FROM interactions`
   ).first();
-<<<<<<< HEAD
-
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const recentSplit = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as probes_24h,
        SUM(CASE WHEN agent_id != 'observatory_probe' OR agent_id IS NULL THEN 1 ELSE 0 END) as agent_reported_24h
      FROM interactions WHERE timestamp > datetime('now', '-24 hours')`
   ).first();
-<<<<<<< HEAD
-
-  // HONEST DEMAND SPLIT (2026-04-15 post-retraction fix).
-  // `agent_reported_total` is inflated by Builder's flywheel-keeper cron, which
-  // writes ~1,000+ _keeper_healthcheck rows/day through /api/report with
-  // agent_id='anonymous'. Treating that as "external demand" is the exact trap
-  // that caused the Apr 15 Wed strategist misread. These fields classify a row
-  // as EXTERNAL only if it is NOT produced by Observatory's own probe cron AND
-  // NOT produced by Builder's flywheel-keeper (by tool-name prefix) AND NOT
-  // the default 'anonymous' agent_id (which Builder and unconfigured callers share).
-  // The SDK, when it ships, MUST set a non-'anonymous' agent_id for installs
-  // to be visible as demand here. Any future internal agent_id must be appended
-  // to INTERNAL_AGENT_IDS below.
   const INTERNAL_AGENT_IDS_SQL = "('observatory_probe', 'anonymous')";
   const INTERNAL_TOOL_PREFIX_SQL = "i.tool_name LIKE '\\_keeper%' ESCAPE '\\'";
-
-=======
-  const INTERNAL_AGENT_IDS_SQL = "('observatory_probe', 'anonymous')";
-  const INTERNAL_TOOL_PREFIX_SQL = "i.tool_name LIKE '\\_keeper%' ESCAPE '\\'";
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const externalTotal = await db.prepare(
     `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
        FROM interactions i
       WHERE agent_id NOT IN ${INTERNAL_AGENT_IDS_SQL}
         AND NOT ${INTERNAL_TOOL_PREFIX_SQL}`
   ).first();
-<<<<<<< HEAD
-
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const external24h = await db.prepare(
     `SELECT COUNT(*) as n, COUNT(DISTINCT agent_id) as distinct_agents
        FROM interactions i
@@ -1886,11 +1731,6 @@ async function handleObservatoryStats(db) {
         AND NOT ${INTERNAL_TOOL_PREFIX_SQL}
         AND timestamp > datetime('now', '-24 hours')`
   ).first();
-<<<<<<< HEAD
-
-  // Internal provenance breakdown — what IS in the 'agent_reported' bucket.
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const internalBreakdown = await db.prepare(
     `SELECT
        SUM(CASE WHEN agent_id = 'observatory_probe' THEN 1 ELSE 0 END) as observatory_probe,
@@ -1898,39 +1738,18 @@ async function handleObservatoryStats(db) {
        SUM(CASE WHEN agent_id = 'anonymous' AND NOT (i.tool_name LIKE '\\_keeper%' ESCAPE '\\') THEN 1 ELSE 0 END) as anonymous_non_keeper
      FROM interactions i`
   ).first();
-<<<<<<< HEAD
-
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   const extInteractions24h = external24h?.n || 0;
   const extAgents24h = external24h?.distinct_agents || 0;
   const extInteractionsTotal = externalTotal?.n || 0;
   const extAgentsTotal = externalTotal?.distinct_agents || 0;
-<<<<<<< HEAD
-
-  // Market-validation gate per Brain monetization trigger rewrite
-  // (2026-04-15 post-retraction). Thresholds:
-  //   >=10,000 externally-reported rows AND >=20 distinct external agent_ids.
-  // Status surfaces on the FRONT of /api/stats so no downstream consumer can
-  // mistake Builder self-measurement for demand again.
-  let marketValidationStatus;
-  if (extInteractionsTotal === 0 && extAgentsTotal === 0) {
-    marketValidationStatus = "ZERO_EXTERNAL_DEMAND: no externally-reported interactions recorded. Dataset is 100% Observatory probes + Builder flywheel-keeper self-measurement. Phase = DATA_ACCUMULATION.";
-  } else if (extInteractionsTotal < 10000 || extAgentsTotal < 20) {
-=======
   let marketValidationStatus;
   if (extInteractionsTotal === 0 && extAgentsTotal === 0) {
     marketValidationStatus = "ZERO_EXTERNAL_DEMAND: no externally-reported interactions recorded. Dataset is 100% Observatory probes + Builder flywheel-keeper self-measurement. Phase = DATA_ACCUMULATION.";
   } else if (extInteractionsTotal < 1e4 || extAgentsTotal < 20) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     marketValidationStatus = `EARLY_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Below monetization floor (>=10,000 rows AND >=20 distinct agents). Phase = DATA_ACCUMULATION.`;
   } else {
     marketValidationStatus = `VALIDATED_DEMAND: ${extInteractionsTotal} external rows from ${extAgentsTotal} distinct external agents. Monetization floor met. Phase = MONETIZATION_READY.`;
   }
-<<<<<<< HEAD
-
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   return {
     observatory: "Dominion Observatory",
     version: "1.2.0",
@@ -1940,11 +1759,7 @@ async function handleObservatoryStats(db) {
       external_interactions_24h: extInteractions24h,
       distinct_external_agents_total: extAgentsTotal,
       distinct_external_agents_24h: extAgents24h,
-<<<<<<< HEAD
-      monetization_floor: { interactions: 10000, distinct_agents: 20 },
-=======
       monetization_floor: { interactions: 1e4, distinct_agents: 20 },
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       classification_rule: "external = (agent_id NOT IN ('observatory_probe','anonymous')) AND (tool_name NOT LIKE '_keeper%')"
     },
     total_servers_tracked: stats?.total_servers || 0,
@@ -1963,15 +1778,9 @@ async function handleObservatoryStats(db) {
       flywheel_keeper_rows: internalBreakdown?.flywheel_keeper || 0,
       anonymous_non_keeper_rows: internalBreakdown?.anonymous_non_keeper || 0
     },
-<<<<<<< HEAD
-    categories: (categories.results || []).map(c => ({ name: c.category, servers: c.count })),
-    data_collection_started: "2026-04-08",
-    message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines. external_demand fields expose REAL external usage — the only number that matters for monetization."
-=======
     categories: (categories.results || []).map((c) => ({ name: c.category, servers: c.count })),
     data_collection_started: "2026-04-08",
     message: "Observatory observes via active probes AND records agent-reported interactions. Probe-source and agent-source counts are tracked separately for honest baselines. external_demand fields expose REAL external usage \u2014 the only number that matters for monetization."
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   };
 }
 __name(handleObservatoryStats, "handleObservatoryStats");
@@ -2201,44 +2010,23 @@ async function handleMCPRequest(request, db) {
     return respondError(-32603, `Internal error: ${err.message}`);
   }
 }
-<<<<<<< HEAD
-
-// ============================================================
-// MAIN WORKER EXPORT
-// ============================================================
-
-export default {
-=======
 __name(handleMCPRequest, "handleMCPRequest");
 var index_default = {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
   // Cloudflare cron entry point. Configured in wrangler.jsonc.
   // Runs every 15 minutes; probes ~25 callable MCP endpoints per run.
   // Result: ~2,400 real probes/day = enough data for category baselines
   // independent of organic agent flywheel.
-<<<<<<< HEAD
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil((async () => {
-      try {
-        const result = await runProbeBatch(env.DB, 25);
-=======
   async scheduled(controller, env2, ctx) {
     const db = env2.DB;
     // Probe batch (every 15 min)
     ctx.waitUntil((async () => {
       try {
         const result = await runProbeBatch(db, 25);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         console.log("scheduled probe", JSON.stringify(result));
       } catch (e) {
         console.log("scheduled probe error", e.message);
       }
     })());
-<<<<<<< HEAD
-  },
-
-  async fetch(request, env, ctx) {
-=======
     // Weekly report generation: Monday ~01:00 UTC (09:00 SGT)
     ctx.waitUntil((async () => {
       try {
@@ -2283,7 +2071,6 @@ var index_default = {
     })());
   },
   async fetch(request, env2, ctx) {
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     const url = new URL(request.url);
     const db = env2.DB;
     if (request.method === "OPTIONS") {
@@ -2868,94 +2655,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
-
-    // Admin: clean up rows whose `url` field was polluted by a bad bulk import
-    // (e.g., `|description|||https://real.url/mcp`). Either repair them by
-    // extracting the real URL, or delete unrecoverable rows. Token-gated.
-    if (url.pathname === "/admin/clean-malformed-urls" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401, headers: { "Content-Type": "application/json" }
-        });
-      }
-      try {
-      const dryRun = url.searchParams.get("dry_run") === "1";
-      const bad = await db.prepare("SELECT id, url FROM servers WHERE url LIKE '|%' LIMIT 200").all();
-      const rows = bad.results || [];
-      // Build the plan in JS first, then dispatch via a single db.batch().
-      const updates = [];
-      const deletes = [];
-      const seenUrls = new Set();
-      for (const row of rows) {
-        const m = row.url.match(/(https?:\/\/[^\s|]+)\s*$/);
-        if (m) {
-          const cleanUrl = m[1];
-          // If this clean URL collides within this batch, drop the duplicate.
-          if (seenUrls.has(cleanUrl)) {
-            deletes.push(row.id);
-          } else {
-            seenUrls.add(cleanUrl);
-            updates.push({ id: row.id, url: cleanUrl });
-          }
-        } else {
-          deletes.push(row.id);
-        }
-      }
-      let repaired = 0;
-      let deleted = 0;
-      let collisions = 0;
-      if (!dryRun) {
-        // Pre-check collisions with already-existing rows in one query.
-        if (updates.length > 0) {
-          const placeholders = updates.map(() => "?").join(",");
-          const existing = await db.prepare(
-            `SELECT url FROM servers WHERE url IN (${placeholders})`
-          ).bind(...updates.map(u => u.url)).all();
-          const existingSet = new Set((existing.results || []).map(r => r.url));
-          // Move colliders from updates -> deletes.
-          for (let i = updates.length - 1; i >= 0; i--) {
-            if (existingSet.has(updates[i].url)) {
-              deletes.push(updates[i].id);
-              updates.splice(i, 1);
-              collisions++;
-            }
-          }
-        }
-        const stmts = [];
-        for (const u of updates) {
-          stmts.push(db.prepare("UPDATE servers SET url = ? WHERE id = ?").bind(u.url, u.id));
-        }
-        for (const id of deletes) {
-          stmts.push(db.prepare("DELETE FROM servers WHERE id = ?").bind(id));
-        }
-        if (stmts.length > 0) {
-          const results = await db.batch(stmts);
-          repaired = results.slice(0, updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
-          deleted = results.slice(updates.length).reduce((a, r) => a + (r.meta?.changes || 0), 0);
-        }
-      } else {
-        repaired = updates.length;
-        deleted = deletes.length;
-      }
-      return new Response(JSON.stringify({
-        scanned: rows.length, repaired, deleted, dry_run: dryRun, collisions
-      }, null, 2), { headers: { "Content-Type": "application/json" } });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message, stack: (e.stack || "").split("\n").slice(0, 5) }, null, 2), {
-          status: 500, headers: { "Content-Type": "application/json" }
-        });
-      }
-    }
-
-    // Admin: probe a single URL and return the raw response info. Diagnostic.
-    if (url.pathname === "/admin/probe-one" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401, headers: { "Content-Type": "application/json" }
-=======
     if (url.pathname === "/admin/clean-malformed-urls" && request.method === "POST") {
       const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
       if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
@@ -3039,7 +2738,6 @@ Sitemap: ${url.origin}/sitemap.xml
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401,
           headers: { "Content-Type": "application/json" }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         });
       }
       const target = url.searchParams.get("url");
@@ -3049,23 +2747,12 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
-
-    // Admin: trigger a probe batch immediately (token-gated). Used to verify
-    // probing works without waiting for the next cron tick.
-    if (url.pathname === "/admin/probe-now" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401, headers: { "Content-Type": "application/json" }
-=======
     if (url.pathname === "/admin/probe-now" && request.method === "POST") {
       const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
       if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
         return new Response(JSON.stringify({ error: "unauthorized" }), {
           status: 401,
           headers: { "Content-Type": "application/json" }
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         });
       }
       const max = Math.min(parseInt(url.searchParams.get("max") || "25"), 100);
@@ -3074,20 +2761,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
-
-    // Admin: backfill categories for 'other'/'uncategorized' servers using inferCategory().
-    // Token-gated via env.ADMIN_TOKEN. Processes one batch per call so it stays under
-    // Worker CPU limits — caller paginates by passing offset.
-    if (url.pathname === "/admin/recategorize" && request.method === "POST") {
-      const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
-      if (!env.ADMIN_TOKEN || token !== env.ADMIN_TOKEN) {
-        return new Response(JSON.stringify({ error: "unauthorized" }), {
-          status: 401, headers: { "Content-Type": "application/json" }
-        });
-      }
-      const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1000);
-=======
     if (url.pathname === "/admin/recategorize" && request.method === "POST") {
       const token = request.headers.get("x-admin-token") || url.searchParams.get("token");
       if (!env2.ADMIN_TOKEN || token !== env2.ADMIN_TOKEN) {
@@ -3097,7 +2770,6 @@ Sitemap: ${url.origin}/sitemap.xml
         });
       }
       const batchSize = Math.min(parseInt(url.searchParams.get("batch_size") || "500"), 1e3);
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
       const afterId = parseInt(url.searchParams.get("after_id") || "0");
       const dryRun = url.searchParams.get("dry_run") === "1";
       const rows = await db.prepare(
@@ -3117,14 +2789,8 @@ Sitemap: ${url.origin}/sitemap.xml
       }
       let updated = 0;
       if (!dryRun && updates.length > 0) {
-<<<<<<< HEAD
-        // Batch UPDATE via D1 transactional batch.
-        const stmts = updates.map(u =>
-          db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
-=======
         const stmts = updates.map(
           (u) => db.prepare("UPDATE servers SET category = ? WHERE id = ?").bind(u.category, u.id)
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
         );
         const results = await db.batch(stmts);
         updated = results.reduce((acc, r) => acc + (r.meta?.changes || 0), 0);
@@ -3145,11 +2811,6 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
-<<<<<<< HEAD
-
-    // MCP endpoint
-=======
->>>>>>> 830879e (Sync local main to live Worker (Ship 1A + 1B + RUN-010 recovery))
     if (url.pathname === "/mcp" && request.method === "POST") {
       return handleMCPRequest(request, db);
     }
