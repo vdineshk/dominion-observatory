@@ -2153,6 +2153,7 @@ The Observatory is the only public source of agent-reported runtime behavioral t
 ## Core documentation
 - [Methodology](${origin}/methodology): How trust scores are computed — weighted blend of latency, success rate, uptime, report volume, and recency decay.
 - [Glossary](${origin}/glossary): Canonical MCP trust terminology — trust score, behavioral baseline, MCP drift, cross-ecosystem telemetry, compliance attestation, anomaly detection, observatory probe, agent-reported interaction, trust gate.
+- [LangChain RFC #35691 position](${origin}/rfc/langchain-35691): Observatory's position in the LangChain MCP observability/compliance RFC. Documents the policy_source=<handler>@<version> convention, Protocol/Receipt composition model, and IMDA 3rd-jurisdiction framing.
 - [Landing](${origin}/): Overview + navigation.
 
 ## Live data surfaces (LLM-indexable HTML)
@@ -2204,7 +2205,8 @@ The Observatory is the only public source of agent-reported runtime behavioral t
           { loc: "/servers/", priority: "0.9", changefreq: "daily" },
           { loc: "/baselines/", priority: "0.8", changefreq: "daily" },
           { loc: "/reports/", priority: "0.9", changefreq: "weekly" },
-          { loc: "/llms.txt", priority: "0.5", changefreq: "weekly" }
+          { loc: "/llms.txt", priority: "0.5", changefreq: "weekly" },
+          { loc: "/rfc/langchain-35691", priority: "0.8", changefreq: "weekly" }
         ];
         const cats = await db.prepare(
           "SELECT DISTINCT category FROM servers WHERE category != 'uncategorized' AND category != 'other' ORDER BY category"
@@ -2377,6 +2379,93 @@ The Observatory is the only public source of agent-reported runtime behavioral t
     if (url.pathname === "/76e6a6b660ae4805acecfc644574aa87.txt") {
       return new Response("76e6a6b660ae4805acecfc644574aa87", {
         headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" }
+      });
+    }
+    // GET /rfc/langchain-35691 — Authority page documenting Observatory's position
+    // in the LangChain "Observability & Compliance for MCP Tools" RFC.
+    // Shipped 2026-04-20 RUN-016 (Strategist) as Discovery-vs-Thesis discriminator
+    // and permanent citation artifact for the policy_source convention.
+    if (url.pathname === "/rfc/langchain-35691" || url.pathname === "/rfc/langchain-35691/") {
+      return new Response(renderHTML({
+        title: "LangChain RFC #35691 \u2014 Observatory Position \u2014 Dominion Observatory",
+        heading: "LangChain RFC #35691: Observability & Compliance for MCP Tools",
+        description: "Dominion Observatory's position in the LangChain MCP observability and compliance RFC. Documents the policy_source convention, Protocol/Receipt composition model, and the runtime behavioral-telemetry layer Observatory contributes.",
+        content: `
+          <section>
+            <h2>What this page is</h2>
+            <p>A permanent, cite-able record of Dominion Observatory's technical position in the ongoing LangChain discussion on observability and compliance for MCP tools (<a href="https://github.com/langchain-ai/langchain/issues/35691" rel="nofollow">issue #35691</a>). Updated as the RFC evolves.</p>
+          </section>
+
+          <section>
+            <h2>The convention: <code>policy_source=&lt;handler&gt;@&lt;version&gt;</code></h2>
+            <p>Every compliance-relevant attestation Observatory emits identifies the handler and version that produced it. This is deliberate: in a multi-handler stack (signing layer, scanning layer, runtime-observation layer), every receipt needs an unambiguous provenance string so downstream verifiers can reproduce the evidence path.</p>
+            <p>Format: <code>policy_source=dominion-observatory@0.2.0</code> (for runtime behavioral attestations) or <code>policy_source=dominion-observatory-langchain@0.1.0</code> (for LangChain-emitted attestations).</p>
+            <p>Public RFC context: reviewer <a href="https://github.com/VladUZH" rel="nofollow">@VladUZH</a> endorsed this convention on thread #35691 and proposed it be adopted as an RFC MUST. The Observatory treats that endorsement as a third-party signal, not a settled outcome \u2014 the RFC is still in draft.</p>
+          </section>
+
+          <section>
+            <h2>Protocol / Receipt composition</h2>
+            <p>The emerging consensus on #35691 separates:</p>
+            <ul>
+              <li><strong>Protocol layer</strong> \u2014 signing / intent / authorization (handled by projects such as APS, AgentMint, Aira, asqav, Signet).</li>
+              <li><strong>Receipt layer</strong> \u2014 what actually happened at runtime: latency, success/failure, tool arguments, error shape, cross-ecosystem behavioral baselines.</li>
+            </ul>
+            <p>Dominion Observatory is a Receipt-layer implementation. It does not sign, authorize, or gate calls on its own; it observes and records, then exposes the record via <a href="${url.origin}/api/compliance">/api/compliance</a> formatted for EU AI Act Article 12 and Singapore IMDA Agentic AI Governance requirements.</p>
+            <p>This composition is why Observatory is orthogonal to the signing-layer projects rather than competitive with them. A full compliance stack needs both.</p>
+          </section>
+
+          <section>
+            <h2>IMDA / 3rd-jurisdiction framing</h2>
+            <p>Most MCP compliance work currently frames around the EU AI Act alone. Observatory ships with first-class support for the Singapore IMDA Agentic AI Governance Framework as a second regulator-grade attestation target, and the <code>policy_source</code> convention is designed to pass through any number of jurisdictional mappings without ambiguity.</p>
+            <p>This was flagged by a reviewer on #35691 as a useful cross-jurisdiction dimension for the RFC \u2014 a third regulatory context the Protocol/Receipt split must accommodate, not just the EU and US.</p>
+          </section>
+
+          <section>
+            <h2>How to integrate now (working today)</h2>
+            <pre><code>pip install dominion-observatory-langchain</code></pre>
+            <pre><code>from dominion_observatory_langchain import ObservatoryCallbackHandler, trust_gate
+
+# Block calls to low-trust MCP servers
+if not trust_gate(server_url, min_score=70, agent_id="my-agent"):
+    raise RuntimeError("Trust gate rejected server")
+
+# Auto-report every call
+chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-agent")]})</code></pre>
+            <p>The callback emits <code>policy_source=dominion-observatory-langchain@0.1.0</code> on every attestation row, which is then surfaced in the compliance export.</p>
+          </section>
+
+          <section>
+            <h2>Known Limitations (honest)</h2>
+            <ul>
+              <li><strong>Cold start.</strong> Trust scores for newly-registered MCP servers have wide confidence intervals until ~50 interactions accumulate. Observatory exposes this via the <code>confidence</code> field on <code>/api/trust</code>.</li>
+              <li><strong>SDK install required for framework-level attestations.</strong> Without the SDK (or direct <code>/api/report</code> calls), Observatory only sees probe-level data \u2014 not agent-reported behavior.</li>
+              <li><strong>Not a signing backend.</strong> Observatory does not cryptographically sign receipts today. If non-repudiation is required, compose with an APS/AgentMint/Aira/Signet signing layer.</li>
+              <li><strong>RFC status is draft.</strong> The <code>policy_source</code> convention has a public endorsement from one reviewer (@VladUZH) but is not yet merged into an approved RFC. This page will be updated as the RFC progresses.</li>
+              <li><strong>External adoption is early.</strong> As of this writing Observatory has observed a small number of externally-attributable agents. The compliance dataset grows with SDK installs; baselines tighten with volume.</li>
+            </ul>
+          </section>
+
+          <section>
+            <h2>Machine-readable pointers</h2>
+            <ul>
+              <li><a href="${url.origin}/api/stats">/api/stats</a> \u2014 Observatory-wide metrics including external_demand split.</li>
+              <li><a href="${url.origin}/api/compliance">/api/compliance</a> \u2014 EU AI Act Article 12 + IMDA-formatted attestations.</li>
+              <li><a href="${url.origin}/api/trust">/api/trust?url=SERVER_URL</a> \u2014 Per-server trust score.</li>
+              <li><a href="${url.origin}/methodology">/methodology</a> \u2014 How trust scores are computed.</li>
+              <li><a href="${url.origin}/glossary">/glossary</a> \u2014 Canonical trust terminology.</li>
+            </ul>
+          </section>
+
+          <section>
+            <h2>Change log</h2>
+            <ul>
+              <li>2026-04-20 \u2014 Page published. Records VladUZH endorsement, Protocol/Receipt framing, IMDA framing.</li>
+            </ul>
+          </section>
+        `,
+        canonical: `${url.origin}/rfc/langchain-35691`
+      }), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=3600" }
       });
     }
     // GET /servers/ — Index of all tracked servers
