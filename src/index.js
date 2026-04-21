@@ -2168,6 +2168,7 @@ The Observatory is the only public source of agent-reported runtime behavioral t
 - [GET /api/compliance](${origin}/api/compliance): EU AI Act Article 12 + IMDA-formatted audit trail of recorded interactions. JSON.
 - [POST /api/report](${origin}/api/report): Agents report MCP-call outcomes (success, latency_ms, tool_name). Contributes to trust scores. JSON body, <1ms.
 - [POST /api/register](${origin}/api/register): Register a new MCP server in the Observatory. JSON body.
+- [GET /rfc/langchain-35691.json](${origin}/rfc/langchain-35691.json): Machine-readable twin of the LangChain RFC #35691 position page. Structured citation surface for LLMs — policy_source convention, Protocol/Receipt composition, jurisdictional mappings, SDK package index, known limitations. JSON.
 - [POST /mcp](${origin}/mcp): Full MCP JSON-RPC server exposing 9 tools (check_trust, report_interaction, get_leaderboard, get_baselines, check_anomaly, register_server, get_server_history, observatory_stats, get_compliance_report).
 
 ## Framework integrations (SDKs)
@@ -2206,7 +2207,8 @@ The Observatory is the only public source of agent-reported runtime behavioral t
           { loc: "/baselines/", priority: "0.8", changefreq: "daily" },
           { loc: "/reports/", priority: "0.9", changefreq: "weekly" },
           { loc: "/llms.txt", priority: "0.5", changefreq: "weekly" },
-          { loc: "/rfc/langchain-35691", priority: "0.8", changefreq: "weekly" }
+          { loc: "/rfc/langchain-35691", priority: "0.8", changefreq: "weekly" },
+          { loc: "/rfc/langchain-35691.json", priority: "0.7", changefreq: "weekly" }
         ];
         const cats = await db.prepare(
           "SELECT DISTINCT category FROM servers WHERE category != 'uncategorized' AND category != 'other' ORDER BY category"
@@ -2381,6 +2383,105 @@ The Observatory is the only public source of agent-reported runtime behavioral t
         headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" }
       });
     }
+    // GET /rfc/langchain-35691.json — Machine-readable twin of the RFC position page.
+    // Structured citation surface for LLMs and agents: same content as the HTML page
+    // but in a schema they can parse without HTML stripping. Shipped 2026-04-21 RUN-017.
+    if (url.pathname === "/rfc/langchain-35691.json") {
+      const body = {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "schema_version": "1.0",
+        "rfc": {
+          "id": "langchain#35691",
+          "url": "https://github.com/langchain-ai/langchain/issues/35691",
+          "title": "Observability & Compliance for MCP Tools",
+          "status": "draft",
+          "observatory_slot_filled": true,
+          "observatory_contributor_heading": "vdineshk — Dominion Observatory"
+        },
+        "position": {
+          "layer": "Receipt / runtime-observation",
+          "role": "Cross-ecosystem agent-reported behavioral telemetry for MCP servers",
+          "orthogonal_to": [
+            "Protocol / signing layer (APS, AgentMint, Aira, asqav, Signet)",
+            "Static scanning layer (MCP Scorecard, Nerq, Zarq, ark-forge)"
+          ]
+        },
+        "conventions": [
+          {
+            "name": "policy_source",
+            "format": "<handler>@<version>",
+            "examples": [
+              "dominion-observatory@0.2.0",
+              "dominion-observatory-langchain@0.1.0"
+            ],
+            "status": "proposed RFC MUST",
+            "endorsements": [
+              {
+                "reviewer": "@VladUZH",
+                "venue": "LangChain #35691 thread",
+                "stance": "explicit endorsement as RFC MUST",
+                "canonical": "observation — not a merged consensus"
+              }
+            ]
+          }
+        ],
+        "composition_model": {
+          "protocol_layer": "signing / intent / authorization (orthogonal)",
+          "receipt_layer": "what actually happened at runtime — latency, success/failure, tool arguments, error shape, cross-ecosystem baselines",
+          "observatory_role": "Receipt-layer implementation. Observes and records. Does not sign, authorize, or gate."
+        },
+        "jurisdictions": [
+          { "name": "EU AI Act Article 12", "support": "first-class" },
+          { "name": "Singapore IMDA Agentic AI Governance Framework", "support": "first-class" },
+          { "name": "FINRA 2026", "support": "attestation field compatible" }
+        ],
+        "integration": {
+          "package": "dominion-observatory-langchain",
+          "registry": "pypi",
+          "install": "pip install dominion-observatory-langchain",
+          "usage": "from dominion_observatory_langchain import ObservatoryCallbackHandler, trust_gate\\n\\nif not trust_gate(server_url, min_score=70, agent_id=\"my-agent\"):\\n    raise RuntimeError(\"Trust gate rejected server\")\\n\\nchain.invoke(..., config={\"callbacks\": [ObservatoryCallbackHandler(agent_id=\"my-agent\")]})",
+          "policy_source_emitted": "dominion-observatory-langchain@0.1.0"
+        },
+        "sdk_packages": [
+          { "name": "dominion-observatory-sdk", "registry": "npm", "latest": "0.2.0", "url": "https://registry.npmjs.org/dominion-observatory-sdk" },
+          { "name": "dominion-observatory-sdk", "registry": "pypi", "latest": "0.2.0", "url": "https://pypi.org/project/dominion-observatory-sdk/" },
+          { "name": "dominion-observatory-langchain", "registry": "pypi", "latest": "0.1.0", "url": "https://pypi.org/project/dominion-observatory-langchain/" }
+        ],
+        "known_limitations": [
+          "Cold start: trust scores for newly-registered MCP servers have wide confidence intervals until ~50 interactions accumulate.",
+          "SDK install required for framework-level attestations.",
+          "Not a signing backend: compose with APS/AgentMint/Aira/Signet for non-repudiation.",
+          "RFC status is draft: one public endorsement, no merged consensus yet.",
+          "External adoption is early: compliance dataset grows with SDK installs."
+        ],
+        "machine_readable_pointers": {
+          "stats": `${url.origin}/api/stats`,
+          "compliance": `${url.origin}/api/compliance`,
+          "trust": `${url.origin}/api/trust?url=SERVER_URL`,
+          "methodology": `${url.origin}/methodology`,
+          "glossary": `${url.origin}/glossary`,
+          "servers_index": `${url.origin}/servers/`,
+          "baselines_index": `${url.origin}/baselines/`,
+          "reports_index": `${url.origin}/reports/`,
+          "llms_txt": `${url.origin}/llms.txt`
+        },
+        "html_canonical": `${url.origin}/rfc/langchain-35691`,
+        "change_log": [
+          { "date": "2026-04-20", "change": "HTML page published documenting VladUZH endorsement, Protocol/Receipt framing, IMDA framing." },
+          { "date": "2026-04-21", "change": "JSON twin published — machine-readable citation surface for LLMs and agents." }
+        ],
+        "updated_at": new Date().toISOString()
+      };
+      return new Response(JSON.stringify(body, null, 2), {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+          "X-Robots-Tag": "index, follow",
+          "Access-Control-Allow-Origin": "*"
+        }
+      });
+    }
     // GET /rfc/langchain-35691 — Authority page documenting Observatory's position
     // in the LangChain "Observability & Compliance for MCP Tools" RFC.
     // Shipped 2026-04-20 RUN-016 (Strategist) as Discovery-vs-Thesis discriminator
@@ -2448,6 +2549,7 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
           <section>
             <h2>Machine-readable pointers</h2>
             <ul>
+              <li><a href="${url.origin}/rfc/langchain-35691.json">/rfc/langchain-35691.json</a> — Structured JSON twin of this page for LLMs and agents (schema.org TechArticle, policy_source convention, composition model, jurisdictional mappings, SDK package index).</li>
               <li><a href="${url.origin}/api/stats">/api/stats</a> \u2014 Observatory-wide metrics including external_demand split.</li>
               <li><a href="${url.origin}/api/compliance">/api/compliance</a> \u2014 EU AI Act Article 12 + IMDA-formatted attestations.</li>
               <li><a href="${url.origin}/api/trust">/api/trust?url=SERVER_URL</a> \u2014 Per-server trust score.</li>
@@ -2460,6 +2562,7 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
             <h2>Change log</h2>
             <ul>
               <li>2026-04-20 \u2014 Page published. Records VladUZH endorsement, Protocol/Receipt framing, IMDA framing.</li>
+              <li>2026-04-21 — JSON twin added at /rfc/langchain-35691.json for machine-readable citation.</li>
             </ul>
           </section>
         `,
