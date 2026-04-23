@@ -2155,6 +2155,7 @@ The Observatory is the only public source of agent-reported runtime behavioral t
 - [Glossary](${origin}/glossary): Canonical MCP trust terminology — trust score, behavioral baseline, MCP drift, cross-ecosystem telemetry, compliance attestation, anomaly detection, observatory probe, agent-reported interaction, trust gate.
 - [Comparison with static scorers](${origin}/compare/): Capability matrix — Observatory (runtime behavioral) vs. MCP Scorecard, Zarq AI (Nerq), Glama, and SkillsIndex (all static). Documents each platform's known blind spots from their own public methodology. Machine-readable twin at /compare.json.
 - [LangChain RFC #35691 position](${origin}/rfc/langchain-35691): Observatory's position in the LangChain MCP observability/compliance RFC. Documents the policy_source=<handler>@<version> convention, Protocol/Receipt composition model, and IMDA 3rd-jurisdiction framing.
+- [Embeddable trust badges](${origin}/badge/): SVG badges for MCP server READMEs. Live trust score auto-updates from agent-reported telemetry. Fetch at /badge/{server-slug}.svg. Color scale: green ≥70, yellow 40–69, red <40, grey untracked.
 - [Landing](${origin}/): Overview + navigation.
 
 ## Live data surfaces (LLM-indexable HTML)
@@ -2212,7 +2213,8 @@ The Observatory is the only public source of agent-reported runtime behavioral t
           { loc: "/rfc/langchain-35691", priority: "0.8", changefreq: "weekly" },
           { loc: "/rfc/langchain-35691.json", priority: "0.7", changefreq: "weekly" },
           { loc: "/compare/", priority: "0.9", changefreq: "weekly" },
-          { loc: "/compare.json", priority: "0.8", changefreq: "weekly" }
+          { loc: "/compare.json", priority: "0.8", changefreq: "weekly" },
+          { loc: "/badge/", priority: "0.7", changefreq: "weekly" }
         ];
         const cats = await db.prepare(
           "SELECT DISTINCT category FROM servers WHERE category != 'uncategorized' AND category != 'other' ORDER BY category"
@@ -2975,6 +2977,65 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
       } catch (e) {
         return new Response(renderHTML({ title: "Error — Dominion Observatory", heading: "Error", description: "Error loading server data", content: `<p>Error loading server profile. <a href="/servers/">Browse all servers</a>.</p>`, canonical: `${url.origin}/servers/` }), { status: 500, headers: { "Content-Type": "text/html; charset=utf-8" } });
       }
+    }
+    // GET /badge/:slug.svg — Embeddable SVG trust-score badge (parasite distribution surface)
+    if (url.pathname.startsWith("/badge/") && url.pathname.endsWith(".svg")) {
+      try {
+        const slug = decodeURIComponent(url.pathname.slice(7, -4));
+        const server = await db.prepare(
+          "SELECT name, url, trust_score, total_calls FROM servers WHERE LOWER(REPLACE(REPLACE(REPLACE(name, ' ', '-'), '.', '-'), '/', '-')) = ? OR url LIKE ? LIMIT 1"
+        ).bind(slug, `%${slug}%`).first();
+        const score = server ? Math.round(server.trust_score * 10) / 10 : null;
+        const scoreText = score === null ? "unknown" : `${score}/100`;
+        const color = score === null ? "#757575" : score >= 70 ? "#2e7d32" : score >= 40 ? "#f57f17" : "#c62828";
+        const label = "MCP Trust";
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="140" height="20" role="img" aria-label="${label}: ${scoreText}"><title>${label}: ${scoreText}</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#fff" stop-opacity=".7"/><stop offset=".1" stop-color="#aaa" stop-opacity=".1"/><stop offset=".9" stop-color="#000" stop-opacity=".3"/><stop offset="1" stop-color="#000" stop-opacity=".5"/></linearGradient><clipPath id="r"><rect width="140" height="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#r)"><rect width="80" height="20" fill="#424242"/><rect x="80" width="60" height="20" fill="${color}"/><rect width="140" height="20" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" text-rendering="geometricPrecision" font-size="110"><text aria-hidden="true" x="400" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="700">${label}</text><text x="400" y="140" transform="scale(.1)" fill="#fff" textLength="700">${label}</text><text aria-hidden="true" x="1090" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="500">${scoreText}</text><text x="1090" y="140" transform="scale(.1)" fill="#fff" textLength="500">${scoreText}</text></g></svg>`;
+        return new Response(svg, {
+          headers: {
+            "Content-Type": "image/svg+xml; charset=utf-8",
+            "Cache-Control": "public, max-age=300, s-maxage=300",
+            "X-Badge-Server": server ? (server.name || server.url || "unknown") : "unknown",
+            "X-Badge-Score": score === null ? "unknown" : String(score),
+            "Access-Control-Allow-Origin": "*"
+          }
+        });
+      } catch (e) {
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="140" height="20"><rect width="140" height="20" fill="#757575"/><text x="70" y="14" fill="#fff" font-family="Verdana,sans-serif" font-size="11" text-anchor="middle">badge error</text></svg>`;
+        return new Response(svg, { status: 500, headers: { "Content-Type": "image/svg+xml; charset=utf-8" } });
+      }
+    }
+    // GET /badge/ — Embeddable badge index & docs
+    if (url.pathname === "/badge/" || url.pathname === "/badge") {
+      const origin = url.origin;
+      return new Response(renderHTML({
+        title: "MCP Trust Badges — Dominion Observatory",
+        heading: "MCP Trust Badges",
+        description: "Embeddable SVG trust-score badges for MCP servers. Paste into your README for a live runtime behavioral trust score from Dominion Observatory — auto-updates from agent-reported telemetry.",
+        content: `
+          <p>Every MCP server indexed by Dominion Observatory has an embeddable SVG badge showing its live trust score. Paste the snippet into your README; the badge auto-updates from agent-reported runtime telemetry with a 5-minute cache.</p>
+          <h2>Markdown</h2>
+          <pre><code>[![MCP Trust](${origin}/badge/YOUR-SERVER-SLUG.svg)](${origin}/servers/YOUR-SERVER-SLUG)</code></pre>
+          <h2>HTML</h2>
+          <pre><code>&lt;a href="${origin}/servers/YOUR-SERVER-SLUG"&gt;&lt;img src="${origin}/badge/YOUR-SERVER-SLUG.svg" alt="MCP Trust Score"&gt;&lt;/a&gt;</code></pre>
+          <h2>Slug</h2>
+          <p>The slug is the server's name lowercased, with dots, slashes, and spaces replaced by hyphens — the same slug as its <a href="/servers/">/servers/</a> profile page. Example: <code>sg-finance-data-mcp</code>.</p>
+          <h2>Color Scale</h2>
+          <ul>
+            <li><strong style="color:#2e7d32">Green</strong> — trust score ≥ 70 (reliable)</li>
+            <li><strong style="color:#f57f17">Yellow</strong> — trust score 40–69 (degraded or insufficient data)</li>
+            <li><strong style="color:#c62828">Red</strong> — trust score &lt; 40 (risky)</li>
+            <li><strong style="color:#757575">Grey</strong> — server not tracked by Observatory yet</li>
+          </ul>
+          <h2>Methodology</h2>
+          <p>Badge scores are a live snapshot of the trust score documented in <a href="/methodology">Methodology</a> — a weighted blend of runtime behavioral metrics (60%) and static signals (40%). Cache-Control is 300 seconds; updates propagate within five minutes.</p>
+          <p>Not tracked yet? <a href="/api/register">Register your server</a>.</p>
+          <h2>Example</h2>
+          <p><a href="/servers/sg-finance-data-mcp"><img src="/badge/sg-finance-data-mcp.svg" alt="MCP Trust Score for sg-finance-data-mcp"></a></p>
+        `,
+        canonical: `${origin}/badge/`
+      }), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=3600" }
+      });
     }
     // GET /baselines/ — Category baseline index
     if (url.pathname === "/baselines/" || url.pathname === "/baselines") {
