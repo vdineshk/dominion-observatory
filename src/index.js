@@ -3532,6 +3532,86 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (url.pathname === "/v1/behavioral-evidence" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) return new Response(JSON.stringify({ error: "url parameter required" }), {
+        status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+      const trust = await handleCheckTrust(db, { server_url: serverUrl });
+      let trustTier = "untracked";
+      if (trust.found) {
+        if (trust.trust_score >= 70) trustTier = "reliable";
+        else if (trust.trust_score >= 30) trustTier = "caution";
+        else trustTier = "risky";
+      }
+      const evidence = {
+        schema_version: "mcp-behavioral-evidence-v1.0",
+        evidence_type: "mcp_behavioral_telemetry",
+        protocol_compatibility: ["a2a-evidence-ref", "erc-8004-endpoint-health"],
+        observatory_url: "https://dominion-observatory.sgdata.workers.dev",
+        generated_at: new Date().toISOString(),
+        server_url: serverUrl,
+        found: trust.found,
+        attestation_ref: `https://dominion-observatory.sgdata.workers.dev/v1/behavioral-evidence?url=${encodeURIComponent(serverUrl)}`,
+        behavioral_evidence: trust.found ? {
+          trust_score: trust.trust_score,
+          trust_tier: trustTier,
+          success_rate: trust.metrics.success_rate,
+          avg_latency_ms: trust.metrics.avg_latency_ms,
+          p95_latency_ms: trust.metrics.p95_latency_ms,
+          uptime_30d: trust.metrics.uptime_30d,
+          total_observations: trust.metrics.total_calls,
+          observations_7d: trust.recent_7d.interactions,
+          avg_latency_7d_ms: trust.recent_7d.avg_latency_ms,
+          first_observed: trust.first_seen,
+          last_observed: trust.last_checked,
+          has_auth_requirement: trust.has_auth,
+          last_error: trust.last_error || null
+        } : null,
+        message: trust.found ? null : trust.message
+      };
+      return new Response(JSON.stringify(evidence, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+    if (url.pathname === "/.well-known/mcp-observatory") {
+      const discovery = {
+        schema_version: "mcp-observatory-discovery-v1.0",
+        claimed: "2026-04-28",
+        name: "Dominion Observatory",
+        description: "Cross-ecosystem behavioral trust scoring for MCP servers. Runtime telemetry from 4,500+ servers, not static metadata.",
+        observatory_url: "https://dominion-observatory.sgdata.workers.dev",
+        mcp_endpoint: "https://dominion-observatory.sgdata.workers.dev/mcp",
+        capabilities: [
+          "behavioral_trust_scoring",
+          "runtime_telemetry",
+          "a2a_evidence_ref",
+          "erc8004_endpoint_health",
+          "weekly_behavioral_reports"
+        ],
+        protocol_compatibility: ["a2a-reputation", "erc-8004-endpoint-health", "mcp"],
+        apis: {
+          trust_check: "GET /api/trust?url={server_url}",
+          behavioral_evidence: "GET /v1/behavioral-evidence?url={server_url}",
+          leaderboard: "GET /api/leaderboard?category={category}&limit={n}",
+          stats: "GET /api/stats",
+          report: "POST /api/report",
+          register: "POST /api/register",
+          servers: "GET /api/servers",
+          reports: "GET /reports/"
+        },
+        data: {
+          servers_tracked: 4584,
+          data_since: "2026-04-08",
+          categories: 16
+        },
+        operator: "Dominion Agent Economy Engine",
+        region: "Global (Cloudflare Edge)"
+      };
+      return new Response(JSON.stringify(discovery, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600" }
+      });
+    }
     const infoPayload = {
       name: "Dominion Observatory",
       version: "1.0.0",
@@ -3545,6 +3625,8 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
         register_server: "POST /api/register {server_url, name, description?, category?, github_url?}",
         compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>",
         servers_list: "/api/servers?category=<category>&limit=<n>",
+        behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
+        observatory_discovery: "/.well-known/mcp-observatory",
         info: "/api/info",
         landing: "/"
       },
