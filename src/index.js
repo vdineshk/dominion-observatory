@@ -3587,12 +3587,16 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
           "runtime_telemetry",
           "a2a_evidence_ref",
           "erc8004_endpoint_health",
-          "weekly_behavioral_reports"
+          "erc8004_attestation",
+          "weekly_behavioral_reports",
+          "mcp_tbf_sep_reference_implementation"
         ],
-        protocol_compatibility: ["a2a-reputation", "erc-8004-endpoint-health", "mcp"],
+        protocol_compatibility: ["a2a-reputation", "erc-8004-endpoint-health", "mcp", "mcp-tbf-sep-2668"],
+        sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668",
         apis: {
           trust_check: "GET /api/trust?url={server_url}",
           behavioral_evidence: "GET /v1/behavioral-evidence?url={server_url}",
+          erc8004_attestation: "GET /v1/erc8004-attestation?url={agent_endpoint}",
           leaderboard: "GET /api/leaderboard?category={category}&limit={n}",
           stats: "GET /api/stats",
           report: "POST /api/report",
@@ -3612,6 +3616,57 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600" }
       });
     }
+    if (url.pathname === "/v1/erc8004-attestation" && request.method === "GET") {
+      const agentEndpoint = url.searchParams.get("url");
+      if (!agentEndpoint) return new Response(JSON.stringify({ error: "url parameter required — provide the agent or MCP server endpoint to attest" }), {
+        status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+      const trust = await handleCheckTrust(db, { server_url: agentEndpoint });
+      let endpointHealthStatus = "untracked";
+      let erc8004Recommendation = "insufficient_data";
+      if (trust.found) {
+        const lastSeenDate = trust.last_checked ? new Date(trust.last_checked) : null;
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const isRecentlySeen = lastSeenDate && lastSeenDate > sevenDaysAgo;
+        const uptime30d = trust.metrics?.uptime_30d ?? 0;
+        if (isRecentlySeen && uptime30d >= 0.9) { endpointHealthStatus = "active"; erc8004Recommendation = "active"; }
+        else if (isRecentlySeen && uptime30d >= 0.5) { endpointHealthStatus = "degraded"; erc8004Recommendation = "degraded"; }
+        else { endpointHealthStatus = "inactive"; erc8004Recommendation = "inactive"; }
+      }
+      const attestation = {
+        schema_version: "erc8004-attestation-v1.0",
+        protocol: "erc-8004",
+        attestation_type: "endpoint_health_attestation",
+        observatory_url: "https://dominion-observatory.sgdata.workers.dev",
+        mcp_tbf_sep_ref: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668",
+        generated_at: new Date().toISOString(),
+        agent_endpoint: agentEndpoint,
+        found: trust.found,
+        attestation: trust.found ? {
+          endpoint_health_status: endpointHealthStatus,
+          erc8004_recommendation: erc8004Recommendation,
+          trust_score: trust.trust_score,
+          last_seen: trust.last_checked,
+          uptime_7d: trust.recent_7d?.uptime ?? null,
+          uptime_30d: trust.metrics?.uptime_30d ?? null,
+          avg_latency_ms: trust.metrics?.avg_latency_ms ?? null,
+          total_observations: trust.metrics?.total_calls ?? 0,
+          observations_7d: trust.recent_7d?.interactions ?? 0,
+          first_observed: trust.first_seen,
+          behavioral_evidence_ref: `https://dominion-observatory.sgdata.workers.dev/v1/behavioral-evidence?url=${encodeURIComponent(agentEndpoint)}`
+        } : null,
+        data_provenance: {
+          source: "cross-ecosystem-runtime-telemetry",
+          observation_pool_servers: 4584,
+          data_since: "2026-04-08",
+          methodology: "https://dominion-observatory.sgdata.workers.dev/methodology"
+        },
+        message: trust.found ? null : "Endpoint not yet tracked. Register via POST /api/register or submit a behavioral report via POST /api/report to begin accumulating attestation data."
+      };
+      return new Response(JSON.stringify(attestation, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
     const infoPayload = {
       name: "Dominion Observatory",
       version: "1.0.0",
@@ -3626,6 +3681,7 @@ chain.invoke(..., config={"callbacks": [ObservatoryCallbackHandler(agent_id="my-
         compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>",
         servers_list: "/api/servers?category=<category>&limit=<n>",
         behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
+        erc8004_attestation: "/v1/erc8004-attestation?url=<agent_endpoint>",
         observatory_discovery: "/.well-known/mcp-observatory",
         info: "/api/info",
         landing: "/"
