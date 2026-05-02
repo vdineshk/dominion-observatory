@@ -30,3 +30,5 @@ This is BLOCKING — not cosmetic. Do before next run.
 - DAEE-Opportunities A2A Oracle page: updated successfully with comment URLs
 - DAEE-Intelligence: AGT-PROTOCOL-STANDARD-UNLOCK-2026-04-29 created successfully
 - All signal files: committed to main
+
+[RECONCILED-2026-05-02] — Both preserved updates verified applied in Brain per RUN-026 run log (2026-04-30). Brain confirmed write-unblocked in RUN-026. No further action needed.

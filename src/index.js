@@ -1784,6 +1784,76 @@ async function handleObservatoryStats(db) {
   };
 }
 __name(handleObservatoryStats, "handleObservatoryStats");
+async function handleTrustDelta(db, params) {
+  const win = (params.window || "24h") === "7d" ? "7d" : "24h";
+  const snapDate = win === "7d" ? "-7 days" : "-1 day";
+  const firstSeenCutoff = win === "7d" ? "-7 days" : "-24 hours";
+  const newServers = await db.prepare(
+    `SELECT url, name, category, trust_score, first_seen FROM servers
+     WHERE first_seen > datetime('now', ?) ORDER BY first_seen DESC LIMIT 50`
+  ).bind(firstSeenCutoff).all();
+  const improved = await db.prepare(
+    `SELECT s.url, s.name, s.category,
+            ROUND(s.trust_score * 10) / 10 as current_score,
+            ROUND(snap.trust_score * 10) / 10 as previous_score,
+            ROUND((s.trust_score - snap.trust_score) * 10) / 10 as delta
+     FROM servers s
+     JOIN daily_snapshots snap ON snap.server_id = s.id
+     WHERE snap.date = date('now', ?)
+       AND (s.trust_score - snap.trust_score) >= 3
+     ORDER BY delta DESC LIMIT 20`
+  ).bind(snapDate).all();
+  const degraded = await db.prepare(
+    `SELECT s.url, s.name, s.category,
+            ROUND(s.trust_score * 10) / 10 as current_score,
+            ROUND(snap.trust_score * 10) / 10 as previous_score,
+            ROUND((s.trust_score - snap.trust_score) * 10) / 10 as delta
+     FROM servers s
+     JOIN daily_snapshots snap ON snap.server_id = s.id
+     WHERE snap.date = date('now', ?)
+       AND (snap.trust_score - s.trust_score) >= 3
+     ORDER BY delta ASC LIMIT 20`
+  ).bind(snapDate).all();
+  const atRisk = await db.prepare(
+    `SELECT url, name, category, ROUND(trust_score * 10) / 10 as trust_score,
+            total_calls, last_checked
+     FROM servers WHERE trust_score < 30 AND total_calls >= 3
+     ORDER BY trust_score ASC LIMIT 20`
+  ).all();
+  const newArr = newServers.results || [];
+  const impArr = improved.results || [];
+  const degArr = degraded.results || [];
+  const riskArr = atRisk.results || [];
+  return {
+    observatory: "Dominion Observatory",
+    endpoint: "/api/trust-delta",
+    schema: "mcp-trust-delta-v1.0",
+    generated_at: new Date().toISOString(),
+    window: win,
+    summary: {
+      new_servers: newArr.length,
+      servers_improved: impArr.length,
+      servers_degraded: degArr.length,
+      servers_at_risk: riskArr.length
+    },
+    headline: `${newArr.length} new servers, ${degArr.length} degraded, ${impArr.length} improved in last ${win}`,
+    servers_new: newArr.map((s) => ({
+      url: s.url, name: s.name, category: s.category,
+      initial_trust_score: s.trust_score, registered: s.first_seen
+    })),
+    servers_improved: impArr,
+    servers_degraded: degArr,
+    servers_at_risk: riskArr,
+    usage: `Poll this endpoint daily to monitor behavioral changes across tracked MCP servers. ?window=24h (default) or ?window=7d`,
+    more: {
+      full_stats: "/api/stats",
+      leaderboard: "/api/leaderboard",
+      individual_trust: "/api/trust?url={server_url}",
+      sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668"
+    }
+  };
+}
+__name(handleTrustDelta, "handleTrustDelta");
 async function handleComplianceReport(db, params) {
   const { server_url, agent_id, start_date, end_date } = params || {};
   let query = `
@@ -2811,6 +2881,98 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json" }
       });
     }
+    if (url.pathname === "/.well-known/mcp-observatory") {
+      return new Response(JSON.stringify({
+        name: "Dominion Observatory",
+        description: "Behavioral trust layer for MCP servers — cross-ecosystem runtime telemetry tracking 4,500+ servers",
+        version: "1.2.0",
+        operator: "Dominion Agent Economy Engine, Singapore",
+        data_since: "2026-04-08",
+        endpoints: {
+          trust_check: `${url.origin}/api/trust?url={server_url}`,
+          behavioral_evidence: `${url.origin}/v1/behavioral-evidence?url={server_url}`,
+          erc8004_attestation: `${url.origin}/v1/erc8004-attestation?url={server_url}`,
+          trust_delta: `${url.origin}/api/trust-delta?window=24h`,
+          leaderboard: `${url.origin}/api/leaderboard`,
+          stats: `${url.origin}/api/stats`,
+          compliance: `${url.origin}/api/compliance`,
+          mcp: `${url.origin}/mcp`
+        },
+        sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668",
+        protocol_compatibility: ["a2a-evidence-ref-v1", "erc-8004-endpoint-health-v1.0", "mcp-tbf-sep-2668", "mcp-trust-delta-v1.0"],
+        iana_status: "pending",
+        contact: "observatory@levylens.co"
+      }, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600" }
+      });
+    }
+    if (url.pathname === "/v1/behavioral-evidence" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) return new Response(JSON.stringify({ error: "url parameter required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      const server = await db.prepare("SELECT url, name, category, trust_score, total_calls, successful_calls, avg_latency_ms, last_checked FROM servers WHERE url = ?").bind(serverUrl).first();
+      return new Response(JSON.stringify({
+        schema: "mcp-behavioral-evidence-v1.0",
+        server_url: serverUrl,
+        observed_at: new Date().toISOString(),
+        observer: "dominion-observatory",
+        found: !!server,
+        trust_score: server ? Math.round(server.trust_score * 10) / 10 : null,
+        behavioral_summary: server ? {
+          total_interactions: server.total_calls,
+          success_rate: server.total_calls > 0 ? Math.round(server.successful_calls / server.total_calls * 1e3) / 10 : null,
+          avg_latency_ms: server.avg_latency_ms ? Math.round(server.avg_latency_ms) : null,
+          last_observed: server.last_checked,
+          category: server.category
+        } : null,
+        protocol_compatibility: ["a2a-evidence-ref-v1", "mcp-tbf-sep-2668"],
+        attestation_source: `${url.origin}/.well-known/mcp-observatory`,
+        sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668"
+      }, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+    if (url.pathname === "/v1/erc8004-attestation" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) return new Response(JSON.stringify({ error: "url parameter required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      const server = await db.prepare("SELECT url, name, trust_score, total_calls, successful_calls, uptime_30d, last_checked, last_error FROM servers WHERE url = ?").bind(serverUrl).first();
+      const uptime7d = server && server.total_calls > 0 ? Math.round(server.successful_calls / server.total_calls * 1e3) / 10 : null;
+      const health = !server ? "UNHEALTHY" : server.trust_score >= 70 ? "HEALTHY" : server.trust_score >= 40 ? "DEGRADED" : "UNHEALTHY";
+      return new Response(JSON.stringify({
+        schema: "erc8004-attestation-v1.0",
+        server_url: serverUrl,
+        attested_at: new Date().toISOString(),
+        attesting_observer: "dominion-observatory",
+        found: !!server,
+        endpoint_health_status: health,
+        uptime_7d: uptime7d,
+        uptime_30d: server ? Math.round((server.uptime_30d || 0) * 10) / 10 : null,
+        trust_score: server ? Math.round(server.trust_score * 10) / 10 : null,
+        total_reports: server ? server.total_calls : null,
+        last_seen: server ? server.last_checked : null,
+        erc8004_recommendation: health,
+        attestation_source: `${url.origin}/.well-known/mcp-observatory`
+      }, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+    if (url.pathname === "/api/badge" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      const server = serverUrl ? await db.prepare("SELECT trust_score, total_calls FROM servers WHERE url = ?").bind(serverUrl).first() : null;
+      const score = server ? Math.round(server.trust_score) : null;
+      const label = score === null ? "unknown" : score >= 70 ? `${score} ✓` : score >= 40 ? `${score} ⚠` : `${score} ✗`;
+      const color = score === null ? "#9f9f9f" : score >= 70 ? "#4c9d48" : score >= 40 ? "#dfb317" : "#e05d44";
+      const lw = 110, rw = 70, w = lw + rw;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="observatory trust: ${label}"><title>observatory trust: ${label}</title><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient><clipPath id="r"><rect width="${w}" height="20" rx="3" fill="#fff"/></clipPath><g clip-path="url(#r)"><rect width="${lw}" height="20" fill="#555"/><rect x="${lw}" width="${rw}" height="20" fill="${color}"/><rect width="${w}" height="20" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11"><text x="${Math.floor(lw / 2)}" y="15" fill="#010101" fill-opacity=".3">observatory trust</text><text x="${Math.floor(lw / 2)}" y="14">observatory trust</text><text x="${lw + Math.floor(rw / 2)}" y="15" fill="#010101" fill-opacity=".3">${label}</text><text x="${lw + Math.floor(rw / 2)}" y="14">${label}</text></g></svg>`;
+      return new Response(svg, {
+        headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=300", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+    if (url.pathname === "/api/trust-delta" && request.method === "GET") {
+      const result = await handleTrustDelta(db, { window: url.searchParams.get("window") || "24h" });
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" }
+      });
+    }
     if (url.pathname === "/mcp" && request.method === "POST") {
       return handleMCPRequest(request, db);
     }
@@ -2927,6 +3089,10 @@ Sitemap: ${url.origin}/sitemap.xml
         register_server: "POST /api/register {server_url, name, description?, category?, github_url?}",
         compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>",
         servers_list: "/api/servers?category=<category>&limit=<n>",
+        trust_delta: "/api/trust-delta?window=24h",
+        behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
+        erc8004_attestation: "/v1/erc8004-attestation?url=<server_url>",
+        badge: "/api/badge?url=<server_url>",
         info: "/api/info",
         landing: "/"
       },
