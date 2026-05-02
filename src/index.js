@@ -2983,6 +2983,144 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300" }
       });
     }
+    // /.well-known/mcp-observatory — canonical MCP behavioral trust discovery path (SEP-2668 spec claim)
+    if (url.pathname === "/.well-known/mcp-observatory") {
+      return new Response(JSON.stringify({
+        name: "Dominion Observatory",
+        description: "Behavioral trust layer for MCP servers — cross-ecosystem runtime telemetry tracking 4,500+ servers",
+        version: "1.2.0",
+        operator: "Dominion Agent Economy Engine, Singapore",
+        data_since: "2026-04-08",
+        endpoints: {
+          trust_check: `${url.origin}/api/trust?url={server_url}`,
+          behavioral_evidence: `${url.origin}/v1/behavioral-evidence?url={server_url}`,
+          erc8004_attestation: `${url.origin}/v1/erc8004-attestation?url={server_url}`,
+          leaderboard: `${url.origin}/api/leaderboard`,
+          stats: `${url.origin}/api/stats`,
+          compliance: `${url.origin}/api/compliance`,
+          mcp: `${url.origin}/mcp`
+        },
+        sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668",
+        erc8004_attestation_endpoint: `${url.origin}/v1/erc8004-attestation`,
+        protocol_compatibility: ["a2a-evidence-ref-v1", "erc-8004-endpoint-health-v1.0", "mcp-tbf-sep-2668"],
+        iana_status: "pending",
+        contact: "observatory@levylens.co"
+      }, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600" }
+      });
+    }
+
+    // /v1/behavioral-evidence — A2A evidence_ref compatible behavioral attestation
+    if (url.pathname === "/v1/behavioral-evidence" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) {
+        return new Response(JSON.stringify({ error: "url parameter required", example: `${url.origin}/v1/behavioral-evidence?url=https://example.mcp/mcp` }), {
+          status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+      const server = await env2.DB.prepare("SELECT * FROM servers WHERE url = ?").bind(serverUrl).first();
+      let successRate = null, avgLatency = null;
+      if (server) {
+        const total = server.total_calls || 0;
+        const successful = server.successful_calls || 0;
+        successRate = total > 0 ? Math.round((successful / total) * 1000) / 1000 : null;
+        avgLatency = server.avg_latency_ms ? Math.round(server.avg_latency_ms) : null;
+      }
+      const evidence = {
+        schema: "mcp-behavioral-evidence-v1.0",
+        server_url: serverUrl,
+        observed_at: new Date().toISOString(),
+        observer: "dominion-observatory",
+        found: !!server,
+        trust_score: server ? Math.round(server.trust_score * 10) / 10 : null,
+        behavioral_summary: {
+          total_reports: server ? server.total_calls || 0 : 0,
+          success_rate: successRate,
+          avg_latency_ms: avgLatency,
+          uptime_30d: server ? server.uptime_30d || null : null,
+          last_seen: server ? server.last_checked || null : null
+        },
+        protocol_compatibility: ["a2a-evidence-ref-v1", "mcp-tbf-sep-2668"],
+        attestation_source: `${url.origin}/.well-known/mcp-observatory`,
+        sep_reference: "https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2668"
+      };
+      return new Response(JSON.stringify(evidence, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" }
+      });
+    }
+
+    // /v1/erc8004-attestation — ERC-8004 compatible endpoint health attestation
+    if (url.pathname === "/v1/erc8004-attestation" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) {
+        return new Response(JSON.stringify({ error: "url parameter required", example: `${url.origin}/v1/erc8004-attestation?url=https://example.mcp/mcp` }), {
+          status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+      const server = await env2.DB.prepare("SELECT * FROM servers WHERE url = ?").bind(serverUrl).first();
+      const uptime7d = server ? server.uptime_30d || null : null;
+      let erc8004_recommendation;
+      if (!server) erc8004_recommendation = "UNKNOWN";
+      else if ((uptime7d || 0) >= 0.95) erc8004_recommendation = "HEALTHY";
+      else if ((uptime7d || 0) >= 0.80) erc8004_recommendation = "DEGRADED";
+      else erc8004_recommendation = "UNHEALTHY";
+      const attestation = {
+        schema: "erc8004-attestation-v1.0",
+        server_url: serverUrl,
+        attested_at: new Date().toISOString(),
+        attesting_observer: "dominion-observatory",
+        found: !!server,
+        endpoint_health_status: erc8004_recommendation,
+        uptime_7d: uptime7d,
+        uptime_30d: server ? server.uptime_30d || null : null,
+        trust_score: server ? Math.round(server.trust_score * 10) / 10 : null,
+        total_reports: server ? server.total_calls || 0 : 0,
+        last_seen: server ? server.last_checked || null : null,
+        erc8004_recommendation,
+        attestation_source: `${url.origin}/.well-known/mcp-observatory`
+      };
+      return new Response(JSON.stringify(attestation, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" }
+      });
+    }
+
+    // /api/badge — SVG trust score badge for MCP server READMEs (artifact-bait INVENT tactic)
+    if (url.pathname === "/api/badge" && request.method === "GET") {
+      const serverUrl = url.searchParams.get("url");
+      if (!serverUrl) {
+        return new Response(JSON.stringify({ error: "url parameter required", usage: "Add to README: ![Trust Score](https://dominion-observatory.sgdata.workers.dev/api/badge?url=YOUR_MCP_URL)", format: "image/svg+xml" }), {
+          status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+      const server = await env2.DB.prepare("SELECT trust_score, total_calls FROM servers WHERE url = ?").bind(serverUrl).first();
+      const score = server ? Math.round(server.trust_score) : null;
+      const color = !score ? "9f9f9f" : score >= 70 ? "44cc11" : score >= 40 ? "dfb317" : "e05d44";
+      const label = "observatory trust";
+      const value = score !== null ? `${score}/100` : "untracked";
+      const labelWidth = 130;
+      const valueWidth = score !== null ? 70 : 80;
+      const totalWidth = labelWidth + valueWidth;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${totalWidth}" height="20" role="img" aria-label="${label}: ${value}">
+  <title>${label}: ${value}</title>
+  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <clipPath id="r"><rect width="${totalWidth}" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="${labelWidth}" height="20" fill="#555"/>
+    <rect x="${labelWidth}" width="${valueWidth}" height="20" fill="#${color}"/>
+    <rect width="${totalWidth}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="110">
+    <text x="${Math.round(labelWidth / 2) * 10 + 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="${(labelWidth - 10) * 10}" lengthAdjust="spacing">${label}</text>
+    <text x="${Math.round(labelWidth / 2) * 10 + 10}" y="140" transform="scale(.1)" textLength="${(labelWidth - 10) * 10}" lengthAdjust="spacing">${label}</text>
+    <text x="${(labelWidth + Math.round(valueWidth / 2)) * 10 + 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="${(valueWidth - 10) * 10}" lengthAdjust="spacing">${value}</text>
+    <text x="${(labelWidth + Math.round(valueWidth / 2)) * 10 + 10}" y="140" transform="scale(.1)" textLength="${(valueWidth - 10) * 10}" lengthAdjust="spacing">${value}</text>
+  </g>
+</svg>`;
+      return new Response(svg, {
+        headers: { "Content-Type": "image/svg+xml", "Cache-Control": "max-age=900", "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
     return new Response(JSON.stringify(infoPayload, null, 2), {
       status: 404,
       headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
