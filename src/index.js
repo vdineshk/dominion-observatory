@@ -1854,6 +1854,81 @@ async function handleTrustDelta(db, params) {
   };
 }
 __name(handleTrustDelta, "handleTrustDelta");
+function computeSLATier(s) {
+  const ageDays = s.first_seen
+    ? Math.floor((Date.now() - new Date(s.first_seen).getTime()) / 86400000)
+    : 0;
+  const score = s.trust_score || 0;
+  const calls = s.total_calls || 0;
+  if (score >= 90 && calls >= 50 && ageDays >= 14) return "Platinum";
+  if (score >= 80 && calls >= 20 && ageDays >= 7) return "Gold";
+  if (score >= 65 && calls >= 5 && ageDays >= 3) return "Silver";
+  if (score >= 50 && calls >= 1 && ageDays >= 1) return "Bronze";
+  return "Unrated";
+}
+__name(computeSLATier, "computeSLATier");
+async function handleSLATier(db, params) {
+  const serverUrl = params.server_url;
+  if (serverUrl) {
+    const row = await db.prepare(
+      `SELECT url, name, category, trust_score, total_calls, successful_calls, first_seen, last_checked FROM servers WHERE url = ?`
+    ).bind(serverUrl).first();
+    if (!row) return { error: "server not found", server_url: serverUrl };
+    const tier = computeSLATier(row);
+    const ageDays = row.first_seen
+      ? Math.floor((Date.now() - new Date(row.first_seen).getTime()) / 86400000)
+      : 0;
+    return {
+      observatory: "Dominion Observatory",
+      endpoint: "/api/sla-tier",
+      schema: "mcp-sla-tier-v1.0",
+      server_url: row.url,
+      name: row.name,
+      category: row.category,
+      sla_tier: tier,
+      trust_score: Math.round(row.trust_score * 10) / 10,
+      total_calls: row.total_calls,
+      data_age_days: ageDays,
+      last_checked: row.last_checked,
+      tier_requirements: {
+        Platinum: { trust_score: 90, total_calls: 50, data_age_days: 14 },
+        Gold:     { trust_score: 80, total_calls: 20, data_age_days: 7 },
+        Silver:   { trust_score: 65, total_calls: 5,  data_age_days: 3 },
+        Bronze:   { trust_score: 50, total_calls: 1,  data_age_days: 1 }
+      },
+      usage: "Embed in your agent selection logic: only connect to Gold+ servers for production workloads."
+    };
+  }
+  const rows = await db.prepare(
+    `SELECT url, name, category, trust_score, total_calls, first_seen FROM servers WHERE total_calls >= 1 ORDER BY trust_score DESC LIMIT 500`
+  ).all();
+  const dist = { Platinum: 0, Gold: 0, Silver: 0, Bronze: 0, Unrated: 0 };
+  const tierLists = { Platinum: [], Gold: [], Silver: [] };
+  for (const s of (rows.results || [])) {
+    const t = computeSLATier(s);
+    dist[t]++;
+    if (tierLists[t]) tierLists[t].push({ url: s.url, name: s.name, category: s.category, trust_score: Math.round(s.trust_score * 10) / 10 });
+  }
+  for (const t of Object.keys(tierLists)) tierLists[t] = tierLists[t].slice(0, 10);
+  return {
+    observatory: "Dominion Observatory",
+    endpoint: "/api/sla-tier",
+    schema: "mcp-sla-tier-v1.0",
+    generated_at: new Date().toISOString(),
+    distribution: dist,
+    top_platinum: tierLists.Platinum,
+    top_gold: tierLists.Gold,
+    top_silver: tierLists.Silver,
+    tier_requirements: {
+      Platinum: { trust_score: 90, total_calls: 50, data_age_days: 14 },
+      Gold:     { trust_score: 80, total_calls: 20, data_age_days: 7 },
+      Silver:   { trust_score: 65, total_calls: 5,  data_age_days: 3 },
+      Bronze:   { trust_score: 50, total_calls: 1,  data_age_days: 1 }
+    },
+    usage: "Filter by tier when selecting MCP servers: GET /api/sla-tier?url={server_url}"
+  };
+}
+__name(handleSLATier, "handleSLATier");
 async function handleComplianceReport(db, params) {
   const { server_url, agent_id, start_date, end_date } = params || {};
   let query = `
@@ -2969,6 +3044,12 @@ Sitemap: ${url.origin}/sitemap.xml
     }
     if (url.pathname === "/api/trust-delta" && request.method === "GET") {
       const result = await handleTrustDelta(db, { window: url.searchParams.get("window") || "24h" });
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" }
+      });
+    }
+    if (url.pathname === "/api/sla-tier" && request.method === "GET") {
+      const result = await handleSLATier(db, { server_url: url.searchParams.get("url") || "" });
       return new Response(JSON.stringify(result, null, 2), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" }
       });
