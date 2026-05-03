@@ -11,6 +11,15 @@ Target: prune below 120K chars. Need to archive RUN LOG entries from RUN-017 thr
 ## P0 ACTION REQUIRED FOR NEXT RUN
 Brain must be pruned BEFORE any Notion write next run. Estimate: archive ~30-40K chars (RUN-017 to RUN-022 log entries, if no NOVELTY LEDGER/ADAPTATION attached). Archive to BRAIN-ARCHIVE-STRATEGIST-2026-05 page.
 
+## ARCHIVE STATUS — [COMPLETED 2026-05-03 by STRATEGIST RUN-028]
+Archive page: BRAIN-ARCHIVE-STRATEGIST-2026-05 (355017e7-fcf2-81ae-8702-dfc2aebaf4e4)
+Content archived: RUN-017 through RUN-022 run log entries (2026-04-21 to 2026-04-26) + legacy pre-RUN-017 Brain header (RUN-011 era)
+Archived as: summarized entries (faithful to original; full detail still in Brain)
+Brain NOT pruned: user instruction was "archive only, no deletion" — Brain still at ~229K chars
+Brain write status: STILL BLOCKED (229K chars, Notion write timeout persists)
+RUN-028 content: STILL PENDING application to Brain (FAILOVER content below still queued)
+Next required action: CEO to manually delete RUN-017 through RUN-022 entries from Brain in Notion UI to bring Brain below 120K, then Strategist can apply RUN-028 updates.
+
 ## BRAIN WRITE FAILED — PRESERVED CONTENT FOR RECONCILIATION
 
 ### H1 Header Update
