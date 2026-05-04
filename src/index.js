@@ -1854,6 +1854,100 @@ async function handleTrustDelta(db, params) {
   };
 }
 __name(handleTrustDelta, "handleTrustDelta");
+async function handleCreateWatchlist(db, body) {
+  if (!body.servers || !Array.isArray(body.servers) || body.servers.length === 0) {
+    return { error: "servers array required (1-50 server URLs)" };
+  }
+  const servers = body.servers.slice(0, 50);
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const agentId = body.agent_id || null;
+  await db.prepare(
+    "INSERT INTO watchlists (token, server_urls, agent_id) VALUES (?, ?, ?)"
+  ).bind(token, JSON.stringify(servers), agentId).run();
+  return {
+    observatory: "Dominion Observatory",
+    schema: "mcp-watchlist-v1.0",
+    watchlist_token: token,
+    servers_watched: servers.length,
+    servers,
+    poll_url: `/api/watchlist/${token}`,
+    usage: `Poll GET /api/watchlist/${token} daily to receive personalized behavioral trust delta for your watched MCP servers. Alerts fire when any server degrades >5 points or drops below trust score 30.`,
+    expires_in_days: 90,
+    note: "Watchlist auto-renews 90 days on each access. Max 50 servers per watchlist."
+  };
+}
+__name(handleCreateWatchlist, "handleCreateWatchlist");
+async function handleGetWatchlist(db, token) {
+  const watchlist = await db.prepare(
+    "SELECT * FROM watchlists WHERE token = ?"
+  ).bind(token).first();
+  if (!watchlist) {
+    return { error: "Watchlist not found or expired", token };
+  }
+  await db.prepare(
+    "UPDATE watchlists SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1, expires_at = datetime('now', '+90 days') WHERE token = ?"
+  ).bind(token).run();
+  const servers = JSON.parse(watchlist.server_urls);
+  const placeholders = servers.map(() => "?").join(",");
+  const current = await db.prepare(
+    `SELECT url, name, category, ROUND(trust_score * 10) / 10 as trust_score, total_calls, last_checked
+     FROM servers WHERE url IN (${placeholders}) ORDER BY trust_score DESC`
+  ).bind(...servers).all();
+  const snapData = await db.prepare(
+    `SELECT s.url,
+            ROUND(s.trust_score * 10) / 10 as current_score,
+            ROUND(snap.trust_score * 10) / 10 as previous_score,
+            ROUND((s.trust_score - snap.trust_score) * 10) / 10 as delta_24h
+     FROM servers s
+     JOIN daily_snapshots snap ON snap.server_id = s.id
+     WHERE s.url IN (${placeholders}) AND snap.date = date('now', '-1 day')`
+  ).bind(...servers).all();
+  const deltaMap = {};
+  for (const r of (snapData.results || [])) {
+    deltaMap[r.url] = { delta_24h: r.delta_24h, previous_score: r.previous_score };
+  }
+  const serverResults = (current.results || []).map((s) => {
+    const d = deltaMap[s.url]?.delta_24h ?? null;
+    const alert = s.trust_score < 30 ? "AT_RISK" : d !== null && d <= -5 ? "DEGRADED" : d !== null && d >= 5 ? "IMPROVED" : "STABLE";
+    return {
+      url: s.url,
+      name: s.name,
+      category: s.category,
+      trust_score: s.trust_score,
+      delta_24h: d,
+      previous_score: deltaMap[s.url]?.previous_score ?? null,
+      alert,
+      last_checked: s.last_checked
+    };
+  });
+  const foundUrls = new Set(serverResults.map((s) => s.url));
+  const untracked = servers.filter((u) => !foundUrls.has(u));
+  const alerts = serverResults.filter((s) => s.alert !== "STABLE");
+  return {
+    observatory: "Dominion Observatory",
+    schema: "mcp-watchlist-v1.0",
+    watchlist_token: token,
+    generated_at: new Date().toISOString(),
+    summary: {
+      servers_watched: servers.length,
+      servers_found: serverResults.length,
+      servers_untracked: untracked.length,
+      alerts_count: alerts.length,
+      access_count: (watchlist.access_count || 0) + 1
+    },
+    alerts: alerts.map((s) => ({ url: s.url, alert: s.alert, trust_score: s.trust_score, delta_24h: s.delta_24h })),
+    servers: serverResults,
+    untracked_servers: untracked.map((u) => ({ url: u, status: "not_yet_tracked", note: "POST /api/register to add this server to Observatory monitoring" })),
+    usage: "Poll daily. Check alerts array first — non-empty means action needed on a watched server.",
+    more: {
+      full_stats: "/api/stats",
+      trust_delta_all: "/api/trust-delta",
+      individual_trust: "/api/trust?url={server_url}",
+      create_watchlist: "POST /api/watchlist {servers: [...], agent_id: optional}"
+    }
+  };
+}
+__name(handleGetWatchlist, "handleGetWatchlist");
 async function handleComplianceReport(db, params) {
   const { server_url, agent_id, start_date, end_date } = params || {};
   let query = `
@@ -3049,6 +3143,39 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (url.pathname === "/api/watchlist" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const result = await handleCreateWatchlist(db, body);
+        if (result.error) {
+          return new Response(JSON.stringify(result), {
+            status: 400,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          });
+        }
+        return new Response(JSON.stringify(result, null, 2), {
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+    }
+    const watchlistMatch = url.pathname.match(/^\/api\/watchlist\/([a-f0-9]{32})$/);
+    if (watchlistMatch && request.method === "GET") {
+      const result = await handleGetWatchlist(db, watchlistMatch[1]);
+      if (result.error) {
+        return new Response(JSON.stringify(result), {
+          status: 404,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" }
+      });
+    }
     if (url.pathname === "/api/servers" && request.method === "GET") {
       const category = url.searchParams.get("category");
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 200);
@@ -3090,6 +3217,8 @@ Sitemap: ${url.origin}/sitemap.xml
         compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>",
         servers_list: "/api/servers?category=<category>&limit=<n>",
         trust_delta: "/api/trust-delta?window=24h",
+        watchlist_create: "POST /api/watchlist {servers: [url,...], agent_id?: string}",
+        watchlist_poll: "GET /api/watchlist/{token}",
         behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
         erc8004_attestation: "/v1/erc8004-attestation?url=<server_url>",
         badge: "/api/badge?url=<server_url>",
