@@ -68,3 +68,5 @@ Observatory interactions: 44,489 total | 2,449 last 24h
 External demand: 10 total, 8 distinct, 1 in 24h — EARLY_DEMAND phase
 Combined MRR: $0 | Days to deadline: 327 | Deploy: db8997b6 (2026-05-02)
 ```
+
+[RECONCILED-2026-05-05 RUN-029] — All 4 adaptations + WHAT WORKS + WHAT FAILS replayed to Worker Memory. IDs: daee-e2647017078ca664 (ADAPT-1), daee-2895a6a2a9ac8f7e (ADAPT-2), daee-bf7f0196cb8ed1c7 (ADAPT-3), daee-269eb054354a7d51 (ADAPT-4), daee-0ce0491dbfb9fc17 (WHAT-WORKS), daee-b632400373227bc6 (WHAT-FAILS). Brain prune: still pending CEO manual action in Notion (separate from Worker — v9.0 architecture makes this non-blocking).
