@@ -1316,6 +1316,57 @@ async function handleCheckTrust(db, params) {
   };
 }
 __name(handleCheckTrust, "handleCheckTrust");
+async function handleFleetMonitor(db, serverUrls) {
+  const maxUrls = 20;
+  const urls = serverUrls.slice(0, maxUrls);
+  const placeholders = urls.map(() => "?").join(",");
+  const rows = urls.length > 0
+    ? (await db.prepare(`SELECT url, name, category, trust_score, total_calls, successful_calls, last_checked FROM servers WHERE url IN (${placeholders})`).bind(...urls).all()).results || []
+    : [];
+  const found = new Map(rows.map((r) => [r.url, r]));
+  const servers = urls.map((u) => {
+    const s = found.get(u);
+    if (!s) return { url: u, tracked: false, trust_score: null, risk: "unknown" };
+    const score = Math.round(s.trust_score * 10) / 10;
+    return {
+      url: u,
+      tracked: true,
+      name: s.name,
+      category: s.category,
+      trust_score: score,
+      total_interactions: s.total_calls,
+      success_rate: s.total_calls > 0 ? Math.round(s.successful_calls / s.total_calls * 1e3) / 10 : null,
+      last_checked: s.last_checked,
+      risk: score >= 70 ? "low" : score >= 40 ? "medium" : "high"
+    };
+  });
+  const tracked = servers.filter((s) => s.tracked);
+  const untracked = servers.filter((s) => !s.tracked);
+  const avgScore = tracked.length > 0 ? Math.round(tracked.reduce((a, s) => a + s.trust_score, 0) / tracked.length * 10) / 10 : null;
+  const highRisk = tracked.filter((s) => s.risk === "high");
+  return {
+    observatory: "Dominion Observatory",
+    endpoint: "/api/monitor",
+    schema: "mcp-fleet-monitor-v1.0",
+    generated_at: new Date().toISOString(),
+    fleet_summary: {
+      total_requested: urls.length,
+      tracked: tracked.length,
+      untracked: untracked.length,
+      avg_trust_score: avgScore,
+      high_risk_count: highRisk.length,
+      fleet_health: highRisk.length === 0 && tracked.length === urls.length ? "green" : highRisk.length > 0 ? "red" : "yellow",
+      recommendation: highRisk.length > 0
+        ? `${highRisk.length} server(s) have trust_score < 40. Review before use.`
+        : untracked.length > 0
+          ? `${untracked.length} server(s) not yet tracked. Report interactions to start building trust profiles.`
+          : "All servers healthy."
+    },
+    servers,
+    claim_uri: "https://dominion-observatory.sgdata.workers.dev/.well-known/mcp-observatory"
+  };
+}
+__name(handleFleetMonitor, "handleFleetMonitor");
 async function handleReportInteraction(db, params) {
   const { server_url, success, latency_ms, tool_name, error_type, error_message, http_status } = params;
   let server = await db.prepare("SELECT id, total_calls, successful_calls, avg_latency_ms FROM servers WHERE url = ?").bind(server_url).first();
@@ -2984,6 +3035,16 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (url.pathname === "/api/monitor" && request.method === "GET") {
+      const urlsParam = url.searchParams.get("urls");
+      if (!urlsParam) return new Response(JSON.stringify({ error: "urls parameter required (comma-separated list of MCP server URLs, max 20)" }), { status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+      const serverUrls = urlsParam.split(",").map((u) => u.trim()).filter(Boolean);
+      if (serverUrls.length === 0) return new Response(JSON.stringify({ error: "at least one URL required" }), { status: 400, headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+      const result = await handleFleetMonitor(db, serverUrls);
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=60" }
+      });
+    }
     if (url.pathname === "/api/leaderboard" && request.method === "GET") {
       const category = url.searchParams.get("category");
       const limit = parseInt(url.searchParams.get("limit") || "10");
@@ -3090,6 +3151,7 @@ Sitemap: ${url.origin}/sitemap.xml
         compliance_export: "/api/compliance?server_url=<url>&agent_id=<id>&start_date=<YYYY-MM-DD>&end_date=<YYYY-MM-DD>",
         servers_list: "/api/servers?category=<category>&limit=<n>",
         trust_delta: "/api/trust-delta?window=24h",
+        fleet_monitor: "/api/monitor?urls=<url1>,<url2>,...<url20>",
         behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
         erc8004_attestation: "/v1/erc8004-attestation?url=<server_url>",
         badge: "/api/badge?url=<server_url>",
