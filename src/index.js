@@ -1018,6 +1018,18 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(report_date DESC);
+
+CREATE TABLE IF NOT EXISTS alert_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL,
+  webhook_url TEXT NOT NULL,
+  server_urls TEXT NOT NULL,
+  drift_threshold INTEGER DEFAULT 5,
+  created_at TEXT DEFAULT (datetime('now')),
+  active INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_agent ON alert_subscriptions(agent_id);
+CREATE INDEX IF NOT EXISTS idx_alert_subscriptions_active ON alert_subscriptions(active);
 `;
 function renderHTML({ title: title2, heading, description, content, canonical, jsonLd }) {
   const ld = jsonLd || {
@@ -1960,6 +1972,68 @@ async function handleComplianceReport(db, params) {
   };
 }
 __name(handleComplianceReport, "handleComplianceReport");
+async function handleAlertSubscribe(db, params) {
+  const { agent_id, webhook_url, server_urls, drift_threshold } = params;
+  if (!agent_id || !webhook_url || !server_urls || !Array.isArray(server_urls) || server_urls.length === 0) {
+    return { error: "agent_id, webhook_url, and server_urls[] required" };
+  }
+  if (server_urls.length > 50) {
+    return { error: "Maximum 50 server_urls per subscription" };
+  }
+  const reserved = ["observatory_probe", "anonymous", "_keeper"];
+  if (reserved.some((r) => agent_id.startsWith(r))) {
+    return { error: "Reserved agent_id" };
+  }
+  const threshold = Math.min(Math.max(parseInt(drift_threshold) || 5, 1), 50);
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS alert_subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, webhook_url TEXT NOT NULL, server_urls TEXT NOT NULL, drift_threshold INTEGER DEFAULT 5, created_at TEXT DEFAULT (datetime('now')), active INTEGER DEFAULT 1)"
+  ).run();
+  await db.prepare(
+    "INSERT INTO alert_subscriptions (agent_id, webhook_url, server_urls, drift_threshold) VALUES (?, ?, ?, ?)"
+  ).bind(agent_id, webhook_url, JSON.stringify(server_urls), threshold).run();
+  return {
+    status: "subscribed",
+    agent_id,
+    servers_watched: server_urls.length,
+    drift_threshold: threshold,
+    description: "Observatory will push a JSON webhook to your webhook_url when any watched server's trust score shifts by drift_threshold points or more.",
+    webhook_payload_schema: {
+      event: "behavioral_drift",
+      server_url: "string",
+      previous_trust_score: "number",
+      current_trust_score: "number",
+      delta: "number",
+      direction: "degraded | improved",
+      observatory_url: "https://dominion-observatory.sgdata.workers.dev/api/trust?url=<server_url>",
+      timestamp: "ISO-8601"
+    },
+    created_at: new Date().toISOString()
+  };
+}
+__name(handleAlertSubscribe, "handleAlertSubscribe");
+async function handleAlertSubscriptions(db) {
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS alert_subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, webhook_url TEXT NOT NULL, server_urls TEXT NOT NULL, drift_threshold INTEGER DEFAULT 5, created_at TEXT DEFAULT (datetime('now')), active INTEGER DEFAULT 1)"
+  ).run();
+  const result = await db.prepare(
+    "SELECT agent_id, server_urls, drift_threshold, created_at FROM alert_subscriptions WHERE active = 1 ORDER BY created_at DESC LIMIT 100"
+  ).all();
+  const subs = (result.results || []).map((r) => ({
+    agent_id: r.agent_id,
+    servers_watched: (() => { try { return JSON.parse(r.server_urls).length; } catch { return 0; } })(),
+    drift_threshold: r.drift_threshold,
+    subscribed_at: r.created_at
+  }));
+  return {
+    endpoint: "/api/alert/subscriptions",
+    description: "Active behavioral drift alert subscriptions. Agents receive a webhook push when watched MCP server trust scores shift by drift_threshold points.",
+    total_active_subscriptions: subs.length,
+    subscriptions: subs,
+    subscribe_at: "POST /api/alert/subscribe",
+    schema: "mcp-behavioral-alert-v1.0"
+  };
+}
+__name(handleAlertSubscriptions, "handleAlertSubscriptions");
 async function handleMCPRequest(request, db) {
   const body = await request.json();
   const { method, id, params } = body;
@@ -3110,6 +3184,28 @@ Sitemap: ${url.origin}/sitemap.xml
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
+    if (url.pathname === "/api/alert/subscribe" && request.method === "POST") {
+      try {
+        const body = await request.json();
+        const result = await handleAlertSubscribe(db, body);
+        const status = result.error ? 400 : 200;
+        return new Response(JSON.stringify(result, null, 2), {
+          status,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+    }
+    if (url.pathname === "/api/alert/subscriptions" && request.method === "GET") {
+      const result = await handleAlertSubscriptions(db);
+      return new Response(JSON.stringify(result, null, 2), {
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+      });
+    }
     if (url.pathname === "/api/servers" && request.method === "GET") {
       const category = url.searchParams.get("category");
       const limit = Math.min(parseInt(url.searchParams.get("limit") || "50"), 200);
@@ -3152,6 +3248,8 @@ Sitemap: ${url.origin}/sitemap.xml
         servers_list: "/api/servers?category=<category>&limit=<n>",
         trust_delta: "/api/trust-delta?window=24h",
         fleet_monitor: "/api/monitor?urls=<url1>,<url2>,...<url20>",
+        alert_subscribe: "POST /api/alert/subscribe {agent_id, webhook_url, server_urls[], drift_threshold?}",
+        alert_subscriptions: "/api/alert/subscriptions",
         behavioral_evidence: "/v1/behavioral-evidence?url=<server_url>",
         erc8004_attestation: "/v1/erc8004-attestation?url=<server_url>",
         badge: "/api/badge?url=<server_url>",
