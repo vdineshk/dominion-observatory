@@ -32,3 +32,8 @@ This is BLOCKING — not cosmetic. Do before next run.
 - All signal files: committed to main
 
 [RECONCILED-2026-05-02] — Both preserved updates verified applied in Brain per RUN-026 run log (2026-04-30). Brain confirmed write-unblocked in RUN-026. No further action needed.
+
+## [RECONCILED-2026-05-08]
+Pre-v9.0 Brain Notion failover. Brain page deprecated — all state now in DAEE Memory Worker.
+Updates referenced here (AGT addendum, A2A opportunity routing) were manually confirmed
+executed by CEO prior runs. No Worker write needed. CLOSED.
