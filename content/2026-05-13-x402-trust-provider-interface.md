@@ -10,9 +10,9 @@
 
 ## 1. The gap this interface fills
 
-x402 ([coinbase/x402](https://github.com/coinbase/x402)) is HTTP-native programmable payments. The protocol's facilitator design lets a server present a `402 Payment Required` response, the client signs a payment authorization, and the facilitator atomically verifies + settles the payment on-chain.
+x402 ([x402-foundation/x402](https://github.com/x402-foundation/x402) — canonical repo since 2026; coinbase/x402 is now a development fork) is HTTP-native programmable payments. The protocol's facilitator design lets a server present a `402 Payment Required` response, the client signs a payment authorization, and the facilitator atomically verifies + settles the payment on-chain.
 
-[RFC #584 (`x402-exec`)](https://github.com/coinbase/x402/issues/584) extends this with **Hooks**: arbitrary business logic that runs inside the same atomic settlement transaction. Hooks fire *after* the payment authorization has been validated.
+[RFC #584 (`x402-exec`)](https://github.com/x402-foundation/x402/issues/584) extends this with **Hooks**: arbitrary business logic that runs inside the same atomic settlement transaction. Hooks fire *after* the payment authorization has been validated.
 
 There is a logical seam that Hooks do not address: **the moment between authorization and settlement, when the server can still decline to settle based on attestation about the calling agent**. We call this the `beforeSettle` seam, and the interface that fills it the **server-side trust-provider interface**.
 
@@ -36,10 +36,10 @@ Wallet-side trust scoring (the "is this counterparty trustworthy" question, scor
 
 Concretely:
 
-- `coinbase/x402` specs as of `main`: no `beforeSettle` extension point.
-- `coinbase/x402` issue #584 Hooks: post-settle only.
+- `x402-foundation/x402` specs as of `main`: no `beforeSettle` extension point.
+- `x402-foundation/x402` issue #584 Hooks: post-settle only.
 - `bitrouter/x402-kit`: composable buyer/seller SDK; no trust-attestation seam.
-- `AceDataCloud/FacilitatorX402`, `ChaosChain/chaoschain-x402`: facilitator implementations; no pre-settle trust check interface.
+- `AceDataCloud/FacilitatorX402`, `ChaosChain/chaoschain-x402`, `nuwa-protocol/x402-exec`: facilitator implementations; no pre-settle trust-check interface.
 - `awesome-x402` curated resources: zero trust-attestation projects listed.
 
 If the trust-provider interface is upstreamed into x402, the entity that defined it authors the interface. Builder PR #35 is that definition.
@@ -118,12 +118,10 @@ A facilitator implementing the trust-provider interface can register `observator
 
 | x402 RFC | Phase covered | Trust-provider interface relationship |
 |---|---|---|
-| [#584 (`x402-exec`) Hooks](https://github.com/coinbase/x402/issues/584) | Post-settle business logic | Orthogonal. Hooks run after settlement; trust-provider runs before. They compose. |
-| [#646 (`scheme_exact_svm` deadline + smart wallet)](https://github.com/coinbase/x402/issues/646) | Authorization scheme | Independent. Trust-provider operates on the agent identity surfaced by any authorization scheme. |
-| [#605 (facilitator 308 redirects)](https://github.com/coinbase/x402/issues/605) | Facilitator transport | Independent. |
-| [#447 (x402 × Circle Gateway)](https://github.com/coinbase/x402/issues/447) | Settlement rail | Independent. |
+| [#584 (`x402-exec`) Hooks](https://github.com/x402-foundation/x402/issues/584) | Post-settle business logic | Orthogonal. Hooks run after settlement; trust-provider runs before. They compose. |
+| Other open RFCs in [x402-foundation/x402 issues](https://github.com/x402-foundation/x402/issues) (auth schemes, facilitator transport, settlement rails) | Authorization, transport, settlement | Independent. Trust-provider operates on the agent identity surfaced by any authorization scheme; runs before any facilitator transport / settlement rail. |
 
-The trust-provider interface is the missing seam between authorization (covered by schemes like `scheme_exact_svm`) and post-settle business logic (covered by Hooks). The v0.1 spec is designed to land as a new section of the x402 specification, not a competing protocol.
+The trust-provider interface is the missing seam between authorization (covered by existing schemes) and post-settle business logic (covered by Hooks). The v0.1 spec is designed to land as a new section of the x402 specification, not a competing protocol.
 
 ---
 
@@ -142,4 +140,4 @@ If you ship a TrustProvider implementation for x402 (Observatory or otherwise), 
 
 **Spec:** daee-engine PR #35 (`specs/x402-trust-provider-interface/v0.1/SPEC.md`, draft).
 **Reference Observatory endpoint:** `GET /agent-query/{agent_id}` → returns behavioral attestation record.
-**Discussion target:** [`coinbase/x402` issue #584](https://github.com/coinbase/x402/issues/584) (Hooks RFC — beforeSettle is the natural extension surface).
+**Discussion target:** [`x402-foundation/x402` issue #584](https://github.com/x402-foundation/x402/issues/584) (Hooks RFC — beforeSettle is the natural extension surface).
