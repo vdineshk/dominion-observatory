@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "spec": "x402-trust-provider-interface v0.1",
+  "spec_url": "https://github.com/vdineshk/daee-engine/blob/main/specs/x402-trust-provider-interface/v0.1/SPEC.md",
+  "version": "0.1",
+  "published": "2026-05-13",
+  "publisher": "Dominion Observatory",
+  "description": "Deterministic conformance test vectors for the x402 server-side trust-provider interface v0.1. An implementation passes if, given each vector's `mock_observatory_response` (or `observatory_error`) for the call shape implied by the input, it returns a TrustDecision deep-equal to `expected_decision`. No network access is required; observatory responses are stubbed.",
+  "conformance_criterion": "An implementation is v0.1-conformant if and only if it produces the exact `expected_decision` for all 15 vectors below using the default `declineBelow=30` threshold (vectors marked `decline_below` override the default).",
+  "license": "CC0-1.0",
+  "vectors": [
+    {
+      "id": "TV-001",
+      "name": "settle-high-score",
+      "description": "Standard happy-path: server has high trust_score, settle.",
+      "input": {
+        "agent_identity": { "id": "agent-x", "serverUrl": "https://example.test/mcp" },
+        "payment_requirements": { "resource": "https://example.test/mcp", "amount": "1000000", "asset": "USDC" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://example.test/mcp",
+        "name": "example",
+        "trust_score": 92.5,
+        "metrics": { "total_calls": 8500, "success_rate": 100 }
+      },
+      "expected_decision": {
+        "kind": "settle",
+        "reason_contains": "trust_score=92.5"
+      }
+    },
+    {
+      "id": "TV-002",
+      "name": "settle-at-threshold",
+      "description": "Exactly at the default threshold (30) — settles per spec §4.2 (declineBelow uses strict less-than).",
+      "input": {
+        "agent_identity": { "id": "agent-y", "serverUrl": "https://b.test/mcp" },
+        "payment_requirements": { "resource": "https://b.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://b.test/mcp",
+        "trust_score": 30
+      },
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=30" }
+    },
+    {
+      "id": "TV-003",
+      "name": "decline-below-default-threshold",
+      "description": "Trust score below default threshold of 30 — decline.",
+      "input": {
+        "agent_identity": { "id": "agent-low", "serverUrl": "https://low.test/mcp" },
+        "payment_requirements": { "resource": "https://low.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://low.test/mcp",
+        "trust_score": 15
+      },
+      "expected_decision": { "kind": "decline", "reason_contains": "trust_score=15" }
+    },
+    {
+      "id": "TV-004",
+      "name": "decline-custom-higher-threshold",
+      "description": "Trust score 45 with declineBelow=50 — decline. Tests threshold override.",
+      "decline_below": 50,
+      "input": {
+        "agent_identity": { "id": "agent-mid", "serverUrl": "https://m.test/mcp" },
+        "payment_requirements": { "resource": "https://m.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://m.test/mcp",
+        "trust_score": 45
+      },
+      "expected_decision": { "kind": "decline", "reason_contains": "trust_score=45" }
+    },
+    {
+      "id": "TV-005",
+      "name": "abstain-unobserved",
+      "description": "Observatory has never seen this server — abstain so next provider in chain runs.",
+      "input": {
+        "agent_identity": { "id": "agent-new", "serverUrl": "https://unknown.test/mcp" },
+        "payment_requirements": { "resource": "https://unknown.test/mcp" }
+      },
+      "mock_observatory_response": { "found": false },
+      "expected_decision": { "kind": "abstain", "reason_contains": "unobserved" }
+    },
+    {
+      "id": "TV-006",
+      "name": "abstain-missing-trust-score",
+      "description": "Found server but trust_score field missing — abstain (defensive: never settle on missing data).",
+      "input": {
+        "agent_identity": { "id": "agent-z", "serverUrl": "https://z.test/mcp" },
+        "payment_requirements": { "resource": "https://z.test/mcp" }
+      },
+      "mock_observatory_response": { "found": true, "server_url": "https://z.test/mcp" },
+      "expected_decision": { "kind": "abstain", "reason_contains": "trust_score" }
+    },
+    {
+      "id": "TV-007",
+      "name": "abstain-no-server-url",
+      "description": "Payment context has neither resource nor agentIdentity.serverUrl — abstain.",
+      "input": {
+        "agent_identity": { "id": "agent-naked" },
+        "payment_requirements": { "amount": "100" }
+      },
+      "mock_observatory_response": null,
+      "expected_decision": { "kind": "abstain", "reason_contains": "server URL" }
+    },
+    {
+      "id": "TV-008",
+      "name": "abstain-observatory-5xx",
+      "description": "Observatory returns 502 — abstain so chain falls through (never block payments on observatory outage).",
+      "input": {
+        "agent_identity": { "id": "agent-q", "serverUrl": "https://q.test/mcp" },
+        "payment_requirements": { "resource": "https://q.test/mcp" }
+      },
+      "observatory_error": { "kind": "http", "status": 502 },
+      "expected_decision": { "kind": "abstain", "reason_contains": "502" }
+    },
+    {
+      "id": "TV-009",
+      "name": "abstain-observatory-timeout",
+      "description": "Observatory request times out — abstain (never block payments on network).",
+      "input": {
+        "agent_identity": { "id": "agent-t", "serverUrl": "https://t.test/mcp" },
+        "payment_requirements": { "resource": "https://t.test/mcp" }
+      },
+      "observatory_error": { "kind": "timeout" },
+      "expected_decision": { "kind": "abstain", "reason_contains": "timeout" }
+    },
+    {
+      "id": "TV-010",
+      "name": "resource-preferred-over-agent-identity",
+      "description": "Both paymentRequirements.resource and agentIdentity.serverUrl present — implementation MUST prefer paymentRequirements.resource (spec §3.1).",
+      "input": {
+        "agent_identity": { "id": "agent-pref", "serverUrl": "https://wrong.test/mcp" },
+        "payment_requirements": { "resource": "https://correct.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://correct.test/mcp",
+        "trust_score": 88
+      },
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=88" },
+      "lookup_must_use": "https://correct.test/mcp"
+    },
+    {
+      "id": "TV-011",
+      "name": "agent-identity-fallback",
+      "description": "paymentRequirements.resource is undefined; agentIdentity.serverUrl is used.",
+      "input": {
+        "agent_identity": { "id": "agent-fb", "serverUrl": "https://fb.test/mcp" },
+        "payment_requirements": {}
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://fb.test/mcp",
+        "trust_score": 70
+      },
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=70" },
+      "lookup_must_use": "https://fb.test/mcp"
+    },
+    {
+      "id": "TV-012",
+      "name": "url-encoded-server",
+      "description": "Server URL contains characters requiring URL-encoding; implementation MUST encode them.",
+      "input": {
+        "agent_identity": { "id": "agent-enc", "serverUrl": "https://example.test/mcp?x=1&y=2" },
+        "payment_requirements": { "resource": "https://example.test/mcp?x=1&y=2" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://example.test/mcp?x=1&y=2",
+        "trust_score": 80
+      },
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=80" },
+      "lookup_must_use_encoded": "https%3A%2F%2Fexample.test%2Fmcp%3Fx%3D1%26y%3D2"
+    },
+    {
+      "id": "TV-013",
+      "name": "non-numeric-trust-score-rejected",
+      "description": "trust_score field present but non-numeric (e.g., null, string) — abstain.",
+      "input": {
+        "agent_identity": { "id": "agent-bad", "serverUrl": "https://bad.test/mcp" },
+        "payment_requirements": { "resource": "https://bad.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://bad.test/mcp",
+        "trust_score": "high"
+      },
+      "expected_decision": { "kind": "abstain", "reason_contains": "trust_score" }
+    },
+    {
+      "id": "TV-014",
+      "name": "decision-shape-is-discriminated-union",
+      "description": "Compliance shape check: the returned TrustDecision MUST have exactly the keys {kind, reason} (no extra keys). reason MUST be a string.",
+      "input": {
+        "agent_identity": { "id": "agent-shape", "serverUrl": "https://shape.test/mcp" },
+        "payment_requirements": { "resource": "https://shape.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://shape.test/mcp",
+        "trust_score": 60
+      },
+      "expected_decision_keys_exact": ["kind", "reason"],
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=60" }
+    },
+    {
+      "id": "TV-015",
+      "name": "deterministic-replay",
+      "description": "Same input + same mock response MUST always produce the same decision. Reference implementations MUST be pure functions over (input, mock_response).",
+      "input": {
+        "agent_identity": { "id": "agent-det", "serverUrl": "https://det.test/mcp" },
+        "payment_requirements": { "resource": "https://det.test/mcp" }
+      },
+      "mock_observatory_response": {
+        "found": true,
+        "server_url": "https://det.test/mcp",
+        "trust_score": 50
+      },
+      "expected_decision": { "kind": "settle", "reason_contains": "trust_score=50" },
+      "replay_runs_required": 3
+    }
+  ]
+}
