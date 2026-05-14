@@ -70,3 +70,8 @@ Combined MRR: $0 | Days to deadline: 327 | Deploy: db8997b6 (2026-05-02)
 ```
 
 [RECONCILED-2026-05-05 RUN-029] — All 4 adaptations + WHAT WORKS + WHAT FAILS replayed to Worker Memory. IDs: daee-e2647017078ca664 (ADAPT-1), daee-2895a6a2a9ac8f7e (ADAPT-2), daee-bf7f0196cb8ed1c7 (ADAPT-3), daee-269eb054354a7d51 (ADAPT-4), daee-0ce0491dbfb9fc17 (WHAT-WORKS), daee-b632400373227bc6 (WHAT-FAILS). Brain prune: still pending CEO manual action in Notion (separate from Worker — v9.0 architecture makes this non-blocking).
+
+## [RECONCILED-2026-05-08]
+Pre-v9.0 Brain Notion failover. Brain page deprecated — all state now in DAEE Memory Worker.
+Archive completed RUN-028. Brain write-blocked status irrelevant — v9.0 migrates all writes
+to Memory Worker. No further action. CLOSED.
