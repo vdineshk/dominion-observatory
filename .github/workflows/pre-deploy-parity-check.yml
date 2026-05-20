@@ -1,0 +1,85 @@
+name: Pre-Deploy Parity Check
+
+# Purpose: prevent divergent-source regressions in the Cloudflare Worker.
+# Background: BOTH vdineshk/dominion-observatory/src/index.js (this repo) and
+# daee-engine/dominion-observatory/src/index.js (Builder's repo) deploy to the
+# SAME Worker named 'dominion-observatory'. Whoever pushes last wins. On
+# 2026-05-19 RUN-047, a deploy from one source silently regressed
+# /.well-known/ctef-conformance from 200 -> 404 because the handler shipped
+# from the other source was not present locally. Net downtime ~3 minutes.
+#
+# This workflow enforces the symmetric counterpart of Builder's
+# PRE-DEPLOY-LIVE-RESPONSE-CHECK adaptation (memory daee-6c272ba943cc041f).
+# It runs on every PR touching src/index.js and verifies that the deployed
+# Worker still serves all spec-cited endpoints with HTTP 200 BEFORE the PR
+# can merge to main (which is what auto-merge-claude.yml watches).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+
+jobs:
+  spec-cited-endpoints-live:
+    name: Verify spec-cited endpoints stay 200 on the deployed Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe live Worker for all spec-cited endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://dominion-observatory.sgdata.workers.dev"
+          FAIL=0
+
+          # Spec-cited endpoint ledger (from /llms-full.txt CITATION STACK).
+          # Update this list whenever a new spec normatively references an
+          # empire endpoint.
+          declare -a endpoints=(
+            "/"
+            "/api/stats"
+            "/api/compliance"
+            "/llms.txt"
+            "/llms-full.txt"
+            "/.well-known/ctef-conformance"
+            "/api/sla-tier"
+          )
+
+          for path in "${endpoints[@]}"; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${path}")
+            if [ "$code" != "200" ]; then
+              echo "::error::Spec-cited endpoint ${path} returned ${code} (expected 200). PR risks regressing live spec conformance."
+              FAIL=1
+            else
+              echo "ok  ${path}  (HTTP ${code})"
+            fi
+          done
+
+          # Parameterised endpoints: subject required, but should return
+          # well-formed JSON with the expected schema field.
+          probe_schema() {
+            local url="$1"
+            local expected_schema="$2"
+            local body
+            body=$(curl -s "${url}")
+            if ! echo "$body" | grep -q "\"schema\":\"${expected_schema}\""; then
+              echo "::error::URL ${url} did not return schema=${expected_schema}. Body: $(echo "$body" | head -c 200)"
+              FAIL=1
+            else
+              echo "ok  ${url}  (schema=${expected_schema})"
+            fi
+          }
+
+          probe_schema "${BASE}/v1/behavioral-evidence/sg-cpf-calculator-mcp" "mcp-behavioral-evidence-v1.0"
+          probe_schema "${BASE}/api/trust-delta?url=https://github.com/punkpeye/awesome-mcp-servers" "mcp-trust-delta-v1.0"
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::One or more spec-cited endpoints regressed. Likely cause: divergent deploy source. Reconcile handlers before merging."
+            exit 1
+          fi
+
+          echo "All spec-cited endpoints PASS. Safe to merge."
