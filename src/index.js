@@ -4353,7 +4353,7 @@ print(r.json())</pre>
           <span class="hl-kw">threshold:</span> <span class="hl-str">50</span>
           <span class="hl-kw">fail_below_threshold:</span> <span class="hl-str">true</span>
           <span class="hl-kw">comment_on_pr:</span> <span class="hl-str">true</span>
-          <span class="hl-kw">github_token:</span> \\${{ secrets.GITHUB_TOKEN }}
+          <span class="hl-kw">github_token:</span> \$\{{ secrets.GITHUB_TOKEN }}
     </div>
     <p style="margin:0.8rem 0"><strong>Step 2:</strong> Commit and push. The action auto-discovers MCP configs in your repo.</p>
     <p><strong>Detected config files:</strong> <code>mcp.json</code>, <code>.cursor/mcp.json</code>, <code>claude_desktop_config.json</code>, and 6 more patterns.</p>
@@ -7209,7 +7209,7 @@ Contact: info@dominionobservatory.com`, {
       try {
         const days = Math.min(parseInt(url.searchParams.get('days') || '3'), 30);
         const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
-        const changes = await db.prepare(\`
+        const changes = await db.prepare(`
           SELECT s.name, s.url, s.trust_score as current_score, s.category,
                  ds.trust_score as previous_score, ds.date,
                  (s.trust_score - ds.trust_score) as delta
@@ -7219,7 +7219,7 @@ Contact: info@dominionobservatory.com`, {
             AND ABS(s.trust_score - ds.trust_score) > 1
           ORDER BY ABS(s.trust_score - ds.trust_score) DESC
           LIMIT ?
-        \`).bind(days, limit).all();
+        `).bind(days, limit).all();
         return new Response(JSON.stringify({
           period_days: days,
           changes: (changes.results || []).map(c => ({
