@@ -1,0 +1,15 @@
+# Dogfooding: run our own MCP Trust Check action on PRs
+name: MCP Trust Check
+on: [pull_request]
+
+jobs:
+  trust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./github-action
+        with:
+          threshold: 50
+          fail_below_threshold: false
+          comment_on_pr: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
