@@ -1,0 +1,41 @@
+name: 'MCP Trust Check'
+description: 'Scan MCP server configs and check behavioral trust scores from Dominion Observatory (14,800+ servers)'
+author: 'Dominion Observatory'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  threshold:
+    description: 'Minimum trust score (0-100). Servers below this trigger warnings.'
+    required: false
+    default: '50'
+  fail_below_threshold:
+    description: 'Fail the check if any server scores below threshold.'
+    required: false
+    default: 'false'
+  config_paths:
+    description: 'Comma-separated additional config file paths to scan (relative to repo root).'
+    required: false
+    default: ''
+  comment_on_pr:
+    description: 'Post results as a PR comment (only on pull_request events).'
+    required: false
+    default: 'true'
+  github_token:
+    description: 'GitHub token for posting PR comments.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  servers_found:
+    description: 'Number of MCP servers discovered'
+  servers_below_threshold:
+    description: 'Number of servers scoring below threshold'
+  results_json:
+    description: 'Full results as JSON string'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

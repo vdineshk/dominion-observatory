@@ -1,0 +1,15 @@
+# Strict MCP Trust Check — fails PR if any server scores below 60
+name: MCP Trust Check (Strict)
+on: [pull_request]
+
+jobs:
+  trust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vdineshk/dominion-observatory/github-action@main
+        with:
+          threshold: 60
+          fail_below_threshold: true
+          comment_on_pr: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}

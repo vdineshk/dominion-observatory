@@ -1,0 +1,14 @@
+# Basic MCP Trust Check — runs on every PR
+name: MCP Trust Check
+on: [pull_request]
+
+jobs:
+  trust-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: vdineshk/dominion-observatory/github-action@main
+        with:
+          threshold: 50
+          comment_on_pr: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
