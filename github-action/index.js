@@ -119,65 +119,82 @@ function findMcpServers(obj) {
 const API_BASE = 'https://dominionobservatory.com/api/trust';
 const API_TIMEOUT = 10000;
 
+function classifyResult(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { state: 'API_ERROR', found: false, trust_score: null, error: 'Invalid API payload' };
+  }
+  if (data.error) return { ...data, state: 'API_ERROR', trust_score: null };
+  if (data.found === false) return { ...data, state: 'NOT_FOUND', trust_score: null };
+  if (typeof data.trust_score === 'number' && Number.isFinite(data.trust_score) && data.trust_score >= 0 && data.trust_score <= 100) {
+    return { ...data, state: 'MEASURED', found: true };
+  }
+  if ((data.trust_score === null || data.trust_score === undefined) &&
+      (data.found === true || data.verdict === 'UNRATED' || data.status === 'UNRATED')) {
+    return { ...data, state: 'UNRATED', trust_score: null };
+  }
+  return { ...data, state: 'API_ERROR', trust_score: null, error: 'Missing or invalid trust score/state' };
+}
+
 async function checkTrust(identifier) {
   const url = `${API_BASE}?url=${encodeURIComponent(identifier)}`;
-
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), API_TIMEOUT);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT);
-
     const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      return { found: false, error: `HTTP ${response.status}` };
-    }
-
-    return await response.json();
+    if (response.status === 404) return { state: 'NOT_FOUND', found: false, trust_score: null };
+    if (!response.ok) return { state: 'API_ERROR', found: false, trust_score: null, error: `HTTP ${response.status}` };
+    return classifyResult(await response.json());
   } catch (e) {
-    return { found: false, error: e.message };
+    return { state: 'API_ERROR', found: false, trust_score: null, error: e.message };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 async function queryAllServers(servers) {
   const results = [];
-  const entries = Array.from(servers.entries());
-
-  for (const [name, { source, identifiers }] of entries) {
+  for (const [name, { source, identifiers }] of servers.entries()) {
     let bestResult = null;
-
-    // Try each identifier, use the first one that returns found:true
     for (const id of identifiers) {
       core.info(`Checking "${name}" with identifier: ${id}`);
       const result = await checkTrust(id);
-
-      if (result.found || result.trust_score !== undefined) {
+      if (result.state === 'MEASURED' || result.state === 'UNRATED') {
         bestResult = result;
         break;
       }
-
-      // Keep the first result as fallback (may have suggestions)
-      if (!bestResult) bestResult = result;
+      // Preserve an API failure over a not-found fallback; neither passes.
+      if (!bestResult || result.state === 'API_ERROR') bestResult = result;
     }
-
-    results.push({
-      name,
-      source,
-      identifiers,
-      ...(bestResult || { found: false, error: 'No API response' }),
-    });
-
-    // Small delay between servers to be polite
-    if (entries.indexOf([name, { source, identifiers }]) < entries.length - 1) {
-      await new Promise(r => setTimeout(r, 200));
-    }
+    results.push({ name, source, identifiers, ...(bestResult || {
+      state: 'API_ERROR', found: false, trust_score: null, error: 'No API response',
+    }) });
   }
-
   return results;
+}
+
+function readPolicy(name, defaultValue = 'fail') {
+  const value = core.getInput(name) || defaultValue;
+  if (!['fail', 'warn'].includes(value)) throw new Error(`${name} must be fail or warn`);
+  return value;
+}
+
+function evaluateResults(results, threshold, policies) {
+  return results.map(r => {
+    const result = { ...r, ...classifyResult(r) };
+    // Fetch failures have a distinct state even when found:false.
+    if (r.state === 'API_ERROR' || r.state === 'NOT_FOUND') result.state = r.state;
+    const measured = result.state === 'MEASURED';
+    const below = measured && result.trust_score < threshold;
+    const policy = measured ? (policies.failBelowThreshold ? 'fail' : 'warn') : policies[result.state];
+    return { ...result, passed: measured && !below,
+      action: measured && !below ? 'pass' : policy,
+      below_threshold: below };
+  });
 }
 
 // ── Grade helper ─────────────────────────────────────────────────────
 function getGrade(score) {
+  if (typeof score !== 'number' || !Number.isFinite(score)) return '--';
   if (score >= 90) return 'A+';
   if (score >= 80) return 'A';
   if (score >= 70) return 'B';
@@ -228,8 +245,8 @@ async function postPRComment(results, threshold, octokit, context) {
 
 function formatResultsMarkdown(results, threshold, marker = '') {
   const serverCount = results.length;
-  const belowThreshold = results.filter(r => r.trust_score !== undefined && r.trust_score < threshold);
-  const notFound = results.filter(r => !r.found && r.trust_score === undefined);
+  const belowThreshold = results.filter(r => r.state === 'MEASURED' && r.trust_score < threshold);
+  const unknown = results.filter(r => r.state !== 'MEASURED');
 
   let md = marker ? `${marker}\n` : '';
   md += `## :shield: MCP Trust Check\n\n`;
@@ -238,27 +255,26 @@ function formatResultsMarkdown(results, threshold, marker = '') {
 
   if (belowThreshold.length > 0) {
     md += `:rotating_light: **${belowThreshold.length} server(s) below trust threshold (${threshold})**\n\n`;
-  } else if (serverCount > 0 && notFound.length < serverCount) {
-    md += `:white_check_mark: **All servers pass trust threshold**\n\n`;
+  } else if (serverCount > 0 && unknown.length === 0) {
+    md += `:white_check_mark: **All measured servers meet the score threshold (not a safety guarantee)**\n\n`;
   }
 
   md += `| Server | Score | Grade | Category | Config | Status |\n`;
   md += `|--------|-------|-------|----------|--------|--------|\n`;
 
+  if (unknown.length) md += `**${unknown.length} server(s) have unknown results; these are not passing checks.**\n\n`;
   for (const r of results) {
-    const score = r.trust_score !== undefined ? r.trust_score : '--';
-    const grade = r.trust_score !== undefined ? `**${r.grade || getGrade(r.trust_score)}**` : '--';
+    const measured = r.state === 'MEASURED';
+    const score = measured ? r.trust_score : '--';
+    const grade = measured ? `**${getGrade(r.trust_score)}**` : '--';
     const category = r.category || '--';
-    const emoji = r.trust_score !== undefined ? getEmoji(r.trust_score, threshold) : ':grey_question:';
-    const status = r.trust_score !== undefined
-      ? (r.trust_score >= threshold ? 'PASS' : 'FAIL')
-      : (r.error ? 'NOT FOUND' : 'UNKNOWN');
-
-    md += `| ${r.name} | ${score} | ${grade} | ${category} | \`${r.source}\` | ${emoji} ${status} |\n`;
+    const emoji = measured ? getEmoji(r.trust_score, threshold) : ':grey_question:';
+    const status = measured ? (r.trust_score >= threshold ? 'MEASURED / PASS' : 'MEASURED / BELOW THRESHOLD') : r.state;
+    md += `| ${r.name} | ${score} | ${grade} | ${category} | \`${r.source}\` | ${emoji} ${status} (${r.action || 'unevaluated'}) |\n`;
   }
 
   md += `\n---\n`;
-  md += `<sub>Powered by [Dominion Observatory](https://dominionobservatory.com) — behavioral trust scoring for 14,800+ MCP servers. `;
+  md += `<sub>Powered by [Dominion Observatory](https://dominionobservatory.com) — MCP projects indexed; behavioral scores only where runtime measurements exist. Others are UNRATED. `;
   md += `[Check any server](https://dominionobservatory.com/check) | [Browse directory](https://dominionobservatory.com/servers/) | `;
   md += `[API](https://dominionobservatory.com/api/trust?url=brave-search)</sub>\n`;
 
@@ -273,8 +289,10 @@ function writeJobSummary(results, threshold) {
 // ── Main ─────────────────────────────────────────────────────────────
 async function run() {
   try {
-    const threshold = parseInt(core.getInput('threshold') || '50', 10);
+    const threshold = Number(core.getInput('threshold') || '50');
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) throw new Error('threshold must be a number from 0 to 100');
     const failBelowThreshold = core.getInput('fail_below_threshold') === 'true';
+    const policies = { failBelowThreshold, UNRATED: readPolicy('unrated_policy'), NOT_FOUND: readPolicy('not_found_policy'), API_ERROR: readPolicy('api_error_policy') };
     const configPaths = core.getInput('config_paths') || '';
     const commentOnPR = core.getInput('comment_on_pr') !== 'false';
     const token = core.getInput('github_token');
@@ -291,6 +309,8 @@ async function run() {
       core.setOutput('servers_found', '0');
       core.setOutput('servers_below_threshold', '0');
       core.setOutput('results_json', '[]');
+      core.setOutput('servers_unknown', '0');
+      core.setOutput('servers_passed', '0');
       return;
     }
 
@@ -305,23 +325,27 @@ async function run() {
       core.setOutput('servers_found', '0');
       core.setOutput('servers_below_threshold', '0');
       core.setOutput('results_json', '[]');
+      core.setOutput('servers_unknown', '0');
+      core.setOutput('servers_passed', '0');
       return;
     }
 
     core.info(`Discovered ${serverCount} MCP server(s)`);
 
     // Phase 3: Query API
-    const results = await queryAllServers(servers);
+    const results = evaluateResults(await queryAllServers(servers), threshold, policies);
 
     // Phase 4: Report
     const belowThreshold = results.filter(r =>
-      r.trust_score !== undefined && r.trust_score < threshold
+      r.state === 'MEASURED' && r.trust_score < threshold
     );
 
     // Set outputs
     core.setOutput('servers_found', String(serverCount));
     core.setOutput('servers_below_threshold', String(belowThreshold.length));
     core.setOutput('results_json', JSON.stringify(results));
+    core.setOutput('servers_unknown', String(results.filter(r => r.state !== 'MEASURED').length));
+    core.setOutput('servers_passed', String(results.filter(r => r.passed).length));
 
     // Write job summary
     writeJobSummary(results, threshold);
@@ -336,31 +360,17 @@ async function run() {
       }
     }
 
-    // Log results
     for (const r of results) {
-      if (r.trust_score !== undefined) {
-        const msg = `${r.name}: score ${r.trust_score} (${r.grade || getGrade(r.trust_score)})`;
-        if (r.trust_score < threshold) {
-          core.warning(msg + ` — BELOW THRESHOLD (${threshold})`);
-        } else {
-          core.info(msg + ' — PASS');
-        }
-      } else {
-        core.warning(`${r.name}: not found in Dominion Observatory`);
-      }
+      const msg = `${r.name}: ${r.state}${r.state === 'MEASURED' ? ` score ${r.trust_score}` : ''} — ${r.action}${r.error ? ` (${r.error})` : ''}`;
+      if (r.passed) core.info(msg); else core.warning(msg);
     }
-
-    // Fail if configured
-    if (failBelowThreshold && belowThreshold.length > 0) {
-      core.setFailed(
-        `${belowThreshold.length} server(s) scored below trust threshold (${threshold}): ` +
-        belowThreshold.map(r => `${r.name} (${r.trust_score})`).join(', ')
-      );
-    }
+    const failures = results.filter(r => r.action === 'fail');
+    if (failures.length) core.setFailed(`${failures.length} server(s) blocked by policy: ` + failures.map(r => `${r.name} (${r.state})`).join(', '));
 
   } catch (error) {
     core.setFailed(`MCP Trust Check failed: ${error.message}`);
   }
 }
 
-run();
+if (require.main === module) run();
+module.exports = { run, checkTrust, classifyResult, queryAllServers, evaluateResults, formatResultsMarkdown, getGrade };
