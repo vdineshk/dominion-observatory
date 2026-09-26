@@ -1,5 +1,5 @@
 name: 'MCP Trust Check'
-description: 'Scan MCP server configs and check behavioral trust scores from Dominion Observatory (14,800+ servers)'
+description: 'Check MCP runtime scores where measured; report UNRATED, missing servers, and API errors explicitly'
 author: 'Dominion Observatory'
 
 branding:
@@ -15,6 +15,18 @@ inputs:
     description: 'Fail the check if any server scores below threshold.'
     required: false
     default: 'false'
+  unrated_policy:
+    description: 'UNRATED/no runtime score policy: fail (default) or warn. warn continues without marking a pass.'
+    required: false
+    default: 'fail'
+  not_found_policy:
+    description: 'Missing server policy: fail (default) or warn. warn continues without marking a pass.'
+    required: false
+    default: 'fail'
+  api_error_policy:
+    description: 'HTTP, network, or invalid response policy: fail (default) or warn. warn continues without marking a pass.'
+    required: false
+    default: 'fail'
   config_paths:
     description: 'Comma-separated additional config file paths to scan (relative to repo root).'
     required: false
@@ -33,6 +45,10 @@ outputs:
     description: 'Number of MCP servers discovered'
   servers_below_threshold:
     description: 'Number of servers scoring below threshold'
+  servers_unknown:
+    description: 'Number UNRATED, NOT_FOUND, or API_ERROR; never passing checks'
+  servers_passed:
+    description: 'Number with measured numeric scores at or above threshold'
   results_json:
     description: 'Full results as JSON string'
 
