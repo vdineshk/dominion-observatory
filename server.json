@@ -6,11 +6,11 @@
     "url": "https://github.com/vdineshk/dominion-observatory",
     "source": "github"
   },
-  "version": "1.1.0",
+  "version": "1.2.0",
   "remotes": [
     {
-      "type": "sse",
-      "url": "https://dominion-observatory.sgdata.workers.dev/mcp"
+      "type": "streamable-http",
+      "url": "https://dominionobservatory.com/mcp"
     }
   ]
 }
