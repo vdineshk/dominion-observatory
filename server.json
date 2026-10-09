@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.vdineshk/dominion-observatory",
+  "name": "com.dominionobservatory/observatory",
   "description": "Runtime behavioral trust scoring for MCP servers. Check reliability before calling unknown tools.",
   "repository": {
     "url": "https://github.com/vdineshk/dominion-observatory",
