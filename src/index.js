@@ -1,3 +1,4 @@
+import { paymentWallet as configuredPaymentWallet, paymentError, verifyBasePayment } from './base-payment.mjs';
 var __defProp = Object.defineProperty;
 var __name = (target, value) => __defProp(target, "name", { value, configurable: true });
 
@@ -2167,7 +2168,7 @@ async function handleComplianceReport(db, params) {
   };
 }
 __name(handleComplianceReport, "handleComplianceReport");
-async function handleMCPRequest(request, db) {
+async function handleMCPRequest(request, db, env) {
   const body = await request.json();
   const { method, id, params } = body;
   const respond = /* @__PURE__ */ __name((result) => new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
@@ -2289,12 +2290,19 @@ async function handleMCPRequest(request, db) {
         return respondError(-32002, `Unknown resource: ${resourceUri}`);
       }
       case "tools/list":
-        return respond({ tools: TOOLS });
+        return respond({ tools: [...TOOLS, { name: "paid_trust_verdict", description: "Trust verdict after a confirmed, single-use Base USDC payment of at least 0.001 USDC.", inputSchema: { type: "object", properties: { server_url: { type: "string" }, payment_tx: { type: "string" } }, required: ["server_url", "payment_tx"] } }] });
       case "tools/call": {
         const toolName = params?.name;
         const toolArgs = params?.arguments || {};
         let result;
         switch (toolName) {
+          case "paid_trust_verdict": {
+            if (!toolArgs.server_url) return respondError(-32602, "server_url required");
+            const paid = await verifyBasePayment(env, db, toolArgs.payment_tx || request.headers.get("X-Payment"));
+            if (!paid.ok) return paymentError(paid.error, paid.status);
+            result = await handleCheckTrust(db, { server_url: toolArgs.server_url });
+            break;
+          }
           case "check_trust":
             result = await handleCheckTrust(db, toolArgs);
             break;
@@ -3568,7 +3576,7 @@ Sitemap: ${url.origin}/sitemap.xml
       });
     }
     if (url.pathname === "/mcp" && request.method === "POST") {
-      return handleMCPRequest(request, db);
+      return handleMCPRequest(request, db, env2);
     }
     if (url.pathname === "/api/trust" && request.method === "GET") {
       const serverUrl = url.searchParams.get("url") || url.searchParams.get("server");
@@ -4783,8 +4791,9 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
         });
       }
       // Fall through to x402 flow if no API key
-      const paymentWallet = env2.PAYMENT_WALLET || "0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2";
+      const paymentWallet = configuredPaymentWallet(env2);
       const paymentProof = request.headers.get("X-Payment");
+      if (!paymentWallet) return paymentError("PAYMENT_WALLET_not_configured", 503);
       if (!paymentProof) {
         return new Response(JSON.stringify({
           wallet_status: "configured",
@@ -4816,6 +4825,8 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
           }
         });
       }
+      const verifiedPayment = await verifyBasePayment(env2, db, paymentProof);
+      if (!verifiedPayment.ok) return paymentError(verifiedPayment.error, verifiedPayment.status);
       const server = await db.prepare(
         "SELECT url, name, trust_score, total_calls, avg_latency_ms, last_checked, category FROM servers WHERE url LIKE ? OR LOWER(name) LIKE ? LIMIT 1"
       ).bind(`%${serverSlug}%`, `%${serverSlug}%`).first();
@@ -4837,7 +4848,7 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
         category: server ? server.category : null,
         last_observed: server ? server.last_checked : null,
         payment_received: paymentProof,
-        payment_status: "accepted",
+        payment_status: "verified",
         wallet_status: "configured",
         // AGT-γ receipt metadata — other agents can verify this receipt
         receipt: {
@@ -4931,6 +4942,10 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
       // Authenticate: API key (Stripe metered), x402, or free trial
       const apiAuth = await authenticateAndMeter(request, env2);
       const paymentProof = request.headers.get("X-Payment");
+      if (!apiAuth && paymentProof) {
+        const verifiedPayment = await verifyBasePayment(env2, db, paymentProof);
+        if (!verifiedPayment.ok) return paymentError(verifiedPayment.error, verifiedPayment.status);
+      }
       let trialMode = false;
       if (!apiAuth && !paymentProof) {
         // Free trial: 50 calls/day per IP, no signup required
@@ -4946,7 +4961,7 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
 
         if (trialCount >= 50) {
           // Trial limit exceeded — return 402 with upgrade options
-          const paymentWallet = env2.PAYMENT_WALLET || "0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2";
+          const paymentWallet = configuredPaymentWallet(env2);
           return new Response(JSON.stringify({
             error: "trial_limit_exceeded",
             service: "Dominion Observatory MCP Gateway",
@@ -4962,7 +4977,7 @@ result = check_trust(<span class="hl-str">"brave-search"</span>)
                 compliance: { price: "$0.10/call", description: "Unlimited + MiCA attestation receipt" }
               },
               x402_usdc: {
-                to: paymentWallet, amount: "0.001", currency: "USDC",
+                enabled: !!paymentWallet, to: paymentWallet, amount: "0.001", currency: "USDC",
                 chain: "base", chain_id: 8453,
                 instructions: "Transfer 0.001 USDC on Base, retry with header X-Payment: <tx_hash>"
               }
@@ -5339,7 +5354,7 @@ get_compliance_report — compliance audit report for a server over a date range
 
 ## Payment-gated (x402)
 /agent-query/{server_slug}  — 0.001 USDC on Base mainnet → full trust verdict
-Wallet: 0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2
+Wallet: ${configuredPaymentWallet(env2) || "Unavailable: PAYMENT_WALLET not configured; paid x402 requests disabled"}
 Send X-Payment header with tx_hash after payment.
 
 ## SDK
@@ -5522,7 +5537,7 @@ NOT collected: prompts, tool arguments, tool outputs, user IDs, IP addresses
 
 ## PAYMENT
 Protocol: x402
-Wallet: 0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2
+Wallet: ${configuredPaymentWallet(env2) || "Unavailable: PAYMENT_WALLET not configured; paid x402 requests disabled"}
 Amount: 0.001 USDC
 Chain: Base (chain_id: 8453)
 Contact: info@dominionobservatory.com`, {
@@ -5905,7 +5920,7 @@ Contact: info@dominionobservatory.com`, {
         protocols: {
           mcp: { endpoint: `${url.origin}/mcp`, transport: "streamable-http" },
           a2a: { evidence_format: "mcp-behavioral-evidence-v1.0", ctef_compatible: true },
-          x402: { wallet: "0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2", amount: "0.001", currency: "USDC", chain: "base", chain_id: 8453 },
+          x402: { wallet: configuredPaymentWallet(env2), enabled: !!configuredPaymentWallet(env2), amount: "0.001", currency: "USDC", chain: "base", chain_id: 8453 },
           "erc-8004": { endpoint: `${url.origin}/v1/erc8004-attestation` },
           "did:web": { document: `${url.origin}/.well-known/did.json` }
         },
@@ -6072,7 +6087,8 @@ Contact: info@dominionobservatory.com`, {
       });
     }
     if (url.pathname === "/api/payment-info") {
-      const paymentWallet = env2.PAYMENT_WALLET || "0xCF8C01f1EFc61fA0eCc7614Ed1fA8f668D9aA8A2";
+      const paymentWallet = configuredPaymentWallet(env2);
+      if (!paymentWallet) return paymentError("PAYMENT_WALLET_not_configured", 503);
       return new Response(JSON.stringify({
         payment_protocol: "x402",
         wallet: paymentWallet,
